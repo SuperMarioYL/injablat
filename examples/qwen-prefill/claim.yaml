@@ -18,13 +18,11 @@ model:
   endpoint: http://127.0.0.1:8000
   backend: vllm
   revision: qwen3-8b-instruct-2026-10-14
-  # Pinned from the stack the trace was recorded on. When your endpoint serves a
-  # different template this check fails on purpose: a different template is a
-  # different prompt, and the replay would no longer be the disputed run.
-  chat_template_sha: af9cd64e61dc43a997c936f2d7b30f51223c7c0b7480a3f1b1ca0112375770d9
-  # Optional: ship the exact template body with the claim instead of reading it
-  # from the endpoint.
-  # chat_template_path: templates/qwen3-chatml.jinja
+  # The template is shipped with this example as a plain ChatML-style file. It
+  # is not read from the replay endpoint: the prompt must be identical to the
+  # recorded one, so the claim carries the exact bytes and pins their hash.
+  chat_template_path: templates/chat_template.jinja
+  chat_template_sha: 2f66f42bc859b624c6c8eace91554dddd901c58484a245a7ad64fa51b1fa3ffa
 
 spans_file: spans.jsonl
 

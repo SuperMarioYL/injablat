@@ -1,0 +1,10 @@
+{%- for message in messages %}
+{{- '<|im_start|>' + message['role'] + '\n' + message['content'] }}
+{%- if not (loop.last and message['role'] == 'assistant' and not add_generation_prompt) %}
+{{- '<|im_end|>' }}
+{%- endif %}
+{{- '\n' }}
+{%- endfor %}
+{%- if add_generation_prompt %}
+{{- '<|im_start|>assistant\n' }}
+{%- endif %}

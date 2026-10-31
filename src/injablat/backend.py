@@ -28,9 +28,7 @@ from typing import Any, ClassVar, Sequence
 import httpx
 
 from .claim import BackendKind, ModelSpec, Sampling
-
-CHAT_TIMEOUT_S = 300.0
-NATIVE_TIMEOUT_S = 30.0
+from .config import RunSettings
 
 
 class BackendError(Exception):
@@ -102,8 +100,11 @@ class Backend:
     kind: ClassVar[BackendKind]
     TEMPLATE_HINT: ClassVar[str] = ""
 
-    def __init__(self, spec: ModelSpec, client: httpx.Client) -> None:
+    def __init__(
+        self, spec: ModelSpec, client: httpx.Client, settings: RunSettings | None = None
+    ) -> None:
         self.spec = spec
+        self.settings = settings or RunSettings()
         self.root, self.chat_url = _urls(spec.endpoint)
         self._client = client
 
@@ -120,6 +121,10 @@ class Backend:
 
     def identity(self) -> str:
         """The endpoint's build string, as recorded in the manifest."""
+        raise NotImplementedError
+
+    def tokenizer_name(self) -> str:
+        """The tokenizer identity this endpoint reports, as recorded in the manifest."""
         raise NotImplementedError
 
     def chat_template(self) -> str | None:
@@ -168,7 +173,9 @@ class Backend:
         return response
 
     def _get_json(self, url: str, *, allow_missing: bool = False) -> dict[str, Any] | None:
-        response = self._request("GET", url, timeout=NATIVE_TIMEOUT_S, allow_missing=allow_missing)
+        response = self._request(
+            "GET", url, timeout=self.settings.tokenize_timeout_s, allow_missing=allow_missing
+        )
         if allow_missing and response.status_code >= 400:
             return None
         return self._decode(response, url)
@@ -197,7 +204,9 @@ class Backend:
         body = self._chat_body(messages, sampling, continue_final_message)
         payload = canonical_json(body)
         started = time.perf_counter()
-        response = self._request("POST", self.chat_url, content=payload, timeout=CHAT_TIMEOUT_S)
+        response = self._request(
+            "POST", self.chat_url, content=payload, timeout=self.settings.request_timeout_s
+        )
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         parsed = self._decode(response, self.chat_url)
 
@@ -239,6 +248,13 @@ class VllmBackend(Backend):
         version = payload.get("version") if payload else None
         return f"vllm/{version or 'unknown'}"
 
+    def tokenizer_name(self) -> str:
+        # vLLM reports the served tokenizer only through /tokenizer_info; the
+        # model label in the claim is the honest fallback when it does not.
+        payload = self._get_json(f"{self.root}/tokenizer_info", allow_missing=True)
+        name = payload.get("model_name") if payload else None
+        return name if isinstance(name, str) and name.strip() else self.spec.name
+
     def chat_template(self) -> str | None:
         payload = self._get_json(f"{self.root}/tokenizer_info", allow_missing=True)
         template = payload.get("chat_template") if payload else None
@@ -247,7 +263,7 @@ class VllmBackend(Backend):
     def tokenize(self, text: str) -> TokenizeResult:
         body = {"model": self.spec.name, "prompt": text}
         url = f"{self.root}/tokenize"
-        payload = self._post_json(url, body, timeout=NATIVE_TIMEOUT_S)
+        payload = self._post_json(url, body, timeout=self.settings.tokenize_timeout_s)
         max_model_len = payload.get("max_model_len")
         return TokenizeResult(
             tokens=_token_ids(payload, url),
@@ -274,6 +290,11 @@ class LlamaCppBackend(Backend):
         build = payload.get("build_info") or payload.get("build_number")
         return f"llama.cpp/{build or 'unknown'}"
 
+    def tokenizer_name(self) -> str:
+        payload = self._get_json(f"{self.root}/props") or {}
+        path = payload.get("model_path")
+        return path if isinstance(path, str) and path.strip() else self.spec.name
+
     def chat_template(self) -> str | None:
         payload = self._get_json(f"{self.root}/props") or {}
         template = payload.get("chat_template")
@@ -287,21 +308,23 @@ class LlamaCppBackend(Backend):
             "with_pieces": False,
         }
         url = f"{self.root}/tokenize"
-        payload = self._post_json(url, body, timeout=NATIVE_TIMEOUT_S)
+        payload = self._post_json(url, body, timeout=self.settings.tokenize_timeout_s)
         return TokenizeResult(tokens=_token_ids(payload, url))
 
 
-def build_backend(spec: ModelSpec, *, fixture: bool = False) -> Backend:
+def build_backend(
+    spec: ModelSpec, *, fixture: bool = False, settings: RunSettings | None = None
+) -> Backend:
     """Create the adapter the claim asks for.
 
     ``fixture=True`` installs an in-process mock transport: the same adapters,
     the same request shapes, deterministic answers, and no network. It exists so
-    the CLI and its checks can run offline; it is not part of the product.
+    the CLI and the test suite can run offline; it is not part of the product.
     """
     client = httpx.Client(timeout=None, transport=fixture_transport() if fixture else None)
     if spec.backend == "vllm":
-        return VllmBackend(spec, client)
-    return LlamaCppBackend(spec, client)
+        return VllmBackend(spec, client, settings)
+    return LlamaCppBackend(spec, client, settings)
 
 
 # -- offline fixture -------------------------------------------------------

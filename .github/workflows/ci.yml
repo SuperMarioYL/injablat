@@ -28,11 +28,4 @@ jobs:
         run: python -c "import injablat"
 
       - name: Test
-        run: |
-          status=0
-          python -m pytest -q || status=$?
-          # exit code 5 means no tests were collected, which is not a failure
-          if [ "$status" -eq 5 ]; then
-            exit 0
-          fi
-          exit "$status"
+        run: python -m pytest -q

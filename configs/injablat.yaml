@@ -1,21 +1,13 @@
-# Default run settings. A claim file overrides any value it sets explicitly.
+# Runtime defaults read by the CLI. Command-line options override them; claims
+# never carry timeouts or run counts. Settings with no reader are rejected when
+# the file loads, so every key here is actually consumed.
 
 backend:
-  # vllm | llamacpp — selects the adapter and the /tokenize dialect it speaks.
-  type: vllm
-  # Used only when the claim does not name its own endpoint.
-  endpoint: "http://127.0.0.1:8000"
+  # Per-request timeouts in seconds: chat completions, and the native endpoints
+  # (/tokenize, /version, /props, /tokenizer_info).
   request_timeout_s: 300
   tokenize_timeout_s: 30
 
-sampling:
-  # Pinned for reproducibility: a claim is only replayable when these are fixed.
-  temperature: 0.0
-  top_p: 1.0
-  seed: 0
-  batch_size: 1
-
 determinism:
-  # Each configuration is dispatched this many times; the outputs must be
-  # byte-identical or the run is reported as nondeterministic.
+  # Dispatches per configuration. A replay needs at least two.
   runs: 2

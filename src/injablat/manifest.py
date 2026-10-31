@@ -40,6 +40,12 @@ class Manifest(BaseModel):
     endpoint_build: str
     chat_template_sha256: str
     chat_template_source: str
+    # Who tokenized the prompt: the endpoint's reported tokenizer identity plus
+    # the id list this tokenizer produces for a fixed probe string. Two stacks
+    # that report the same name but tokenize the probe differently are not the
+    # same computation.
+    tokenizer_name: str
+    tokenizer_probe_sha256: str
     prompt_tokens: int
     prompt_token_sha256: str
     request_sha256: str
@@ -72,6 +78,11 @@ class DeterminismResult:
 
 _COMPARED_FIELDS = ("request_sha256", "prompt_token_sha256", "output_sha256")
 
+# Tokenized once per replay to fingerprint the tokenizer itself. The text is
+# fixed and carries both prose and digits so a substituted vocabulary usually
+# changes at least one id.
+TOKENIZER_PROBE = "injablat tokenizer probe: pack my box with five dozen liquor jugs. 0123456789"
+
 
 def sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
@@ -89,6 +100,8 @@ def build_manifest(
     config_id: str,
     template: ChatTemplate,
     endpoint_build: str,
+    tokenizer_name: str,
+    tokenizer_probe_tokens: Sequence[int],
     prompt_tokens: Sequence[int],
     chat: ChatResult,
 ) -> Manifest:
@@ -103,6 +116,8 @@ def build_manifest(
         endpoint_build=endpoint_build,
         chat_template_sha256=template.sha256,
         chat_template_source=template.source,
+        tokenizer_name=tokenizer_name,
+        tokenizer_probe_sha256=token_ids_sha256(tokenizer_probe_tokens),
         prompt_tokens=len(prompt_tokens),
         prompt_token_sha256=token_ids_sha256(prompt_tokens),
         request_sha256=sha256_hex(chat.request_bytes),
