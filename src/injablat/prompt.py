@@ -21,7 +21,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Literal, Sequence
+from typing import Callable, Collection, Literal, Sequence
 
 import jinja2
 from jinja2 import Environment, Undefined
@@ -98,12 +98,28 @@ def resolve_chat_template(claim: Claim, backend: Backend) -> ChatTemplate:
     return ChatTemplate(text=text, sha256=digest, source="endpoint")
 
 
-def build_messages(claim: Claim) -> list[dict[str, str]]:
-    """Compose the chat messages the injection describes, in claim order."""
-    return [
-        {"role": _MESSAGE_ROLE[span.role], "content": span.text}
-        for span in claim.spans
-    ]
+def build_messages(
+    claim: Claim,
+    *,
+    without: Collection[str] = (),
+    prefill_prefix: str | None = None,
+) -> list[dict[str, str]]:
+    """Compose the chat messages the injection describes, in claim order.
+
+    Ablation is deletion of text, so ``without`` names spans to leave out and
+    ``prefill_prefix`` replaces the prefill with a shorter character prefix.
+    Both are how a configuration differs from the recorded run.
+    """
+    dropped = set(without)
+    messages: list[dict[str, str]] = []
+    for span in claim.spans:
+        if span.id in dropped:
+            continue
+        text = span.text
+        if span.role == "prefill" and prefill_prefix is not None:
+            text = prefill_prefix
+        messages.append({"role": _MESSAGE_ROLE[span.role], "content": text})
+    return messages
 
 
 def render_prompt(

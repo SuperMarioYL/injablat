@@ -201,7 +201,15 @@ class Backend:
         *,
         continue_final_message: bool,
     ) -> ChatResult:
-        body = self._chat_body(messages, sampling, continue_final_message)
+        return self.dispatch(self._chat_body(messages, sampling, continue_final_message))
+
+    def dispatch(self, body: dict[str, Any]) -> ChatResult:
+        """Send one already-composed chat body and extract the completion.
+
+        Ablation keeps the exact body it sent, and verification replays it. Both
+        must go through the same extraction, or a stored output hash would not
+        name the same answer a re-run compares against.
+        """
         payload = canonical_json(body)
         started = time.perf_counter()
         response = self._request(

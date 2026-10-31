@@ -1,19 +1,13 @@
 """Command line entry point.
 
-Implemented in this build stage:
-
     validate   schema, template resolution, and per-span token counts
-    replay     dispatches the claim, writes the manifest, and runs the
-               determinism gate
+    replay     dispatch the claim, write the manifest, run the determinism gate
+    ablate     deletion sweep, prefill ladder, and greedy minimal-set search
+    report     render the verdict card as report.md and report.html
+    verify     re-dispatch a card's recorded requests and print MATCH or DRIFT
 
-Not implemented yet (they exit 3 and say so):
-
-    ablate     span removal sweep and minimal sufficient search
-    report     report.md / report.html verdict card
-    verify     re-dispatch a report's manifest and diff it row by row
-
-Exit codes: 0 success, 1 nondeterministic replay, 2 claim/template/endpoint
-error, 3 command not implemented in this stage.
+Exit codes: 0 a verdict was produced, 1 nondeterministic / no verdict / drift,
+2 claim, template, or endpoint error.
 """
 
 from __future__ import annotations
@@ -24,9 +18,11 @@ from pathlib import Path
 from typing import NoReturn, Optional, Sequence
 
 import typer
+from pydantic import ValidationError
 
+from .ablate import AblationError, AblationResult, ablate_claim, load_ablation
 from .backend import Backend, BackendError, ChatResult, build_backend
-from .claim import SPAN_ROLES, Claim, ClaimError, load_claim
+from .claim import SPAN_ROLES, Claim, ClaimError, ModelSpec, load_claim
 from .config import ConfigError, RunSettings, load_run_settings
 from .manifest import (
     TOKENIZER_PROBE,
@@ -43,10 +39,11 @@ from .prompt import (
     render_prompt,
     resolve_chat_template,
 )
+from .report import write_report
+from .verdict import Report, Status, VerifyResult, assemble, verify_report
 
 EXIT_NONDETERMINISTIC = 1
 EXIT_ERROR = 2
-EXIT_NOT_IMPLEMENTED = 3
 
 CONFIG_ID_FULL = "full"
 
@@ -342,33 +339,262 @@ def _write_json(path: Path, payload: object) -> None:
     )
 
 
-def _not_implemented(command: str) -> NoReturn:
-    typer.echo(f"{command}: not implemented in this build stage", err=True)
-    raise typer.Exit(EXIT_NOT_IMPLEMENTED)
+# -- ablation --------------------------------------------------------------
 
 
 @app.command()
 def ablate(
-    claim_path: Optional[Path] = typer.Argument(None, help="Path to claim.yaml."),
+    claim_path: Path = typer.Argument(
+        ..., exists=True, dir_okay=False, readable=True, help="Path to claim.yaml."
+    ),
+    runs: Optional[int] = typer.Option(
+        None, "--runs", "-n", help="Dispatches per configuration (default: determinism.runs)."
+    ),
+    out: Optional[Path] = typer.Option(
+        None, "--out", help="Sweep directory (default: reports/<claim id>)."
+    ),
+    config: Optional[Path] = _CONFIG_OPTION,
+    fixture: bool = _FIXTURE_OPTION,
 ) -> None:
-    """Remove spans and search for the minimal set (not implemented yet)."""
-    _not_implemented("ablate")
+    """Remove spans, walk the prefill ladder, and search the minimal sufficient set."""
+    claim = _read_claim(claim_path)
+    settings = _run_settings(config)
+    run_count = runs if runs is not None else settings.runs
+    if run_count < 2:
+        _die(
+            f"an ablation needs at least two runs per configuration to test determinism, "
+            f"got {run_count}"
+        )
+
+    out_dir = out if out is not None else Path("reports") / claim.id
+    try:
+        with build_backend(
+            claim.model, fixture=_fixture_enabled(fixture), settings=settings
+        ) as backend:
+            result = ablate_claim(claim, backend, run_count)
+    except (TemplateError, BackendError) as exc:
+        _die(str(exc))
+
+    report = assemble(result.ablation)
+    ablation_path, manifest_path, records = _write_ablation(out_dir, result)
+    _print_report_header(report)
+    typer.echo(f"runs per configuration {report.runs_per_config}")
+    typer.echo(f"determinism {report.determinism.value} ({report.determinism_detail})")
+    typer.echo("")
+    typer.echo(f"  {'remove span':<30}{'behavior':<12}{'output sha':<14}{'role'}")
+    for row in report.rows:
+        typer.echo(
+            f"  {row.label:<30}{row.behavior.value:<12}{_short_sha(row.output_sha256):<14}"
+            f"{row.role.value}"
+        )
+    typer.echo("")
+    if report.status is Status.VERDICT:
+        typer.echo(f"minimal sufficient injection  {report.minimal_text}")
+        prefill = report.survives_without_prefill()
+        if prefill is not None:
+            typer.echo(f"survives without prefill      {'YES' if prefill else 'NO'}")
+    else:
+        typer.echo(report.reason)
+    typer.echo("")
+    typer.echo(f"wrote {ablation_path}")
+    if manifest_path is not None:
+        typer.echo(f"wrote {manifest_path}")
+    typer.echo(f"wrote {records} run records under {out_dir / 'runs'}")
+
+    if report.exit_code != 0:
+        raise typer.Exit(report.exit_code)
+
+
+def _short_sha(sha: Optional[str]) -> str:
+    return f"{sha[:8]}..." if sha is not None else "(disagree)"
+
+
+def _print_report_header(report: Report) -> None:
+    model = report.model
+    sampling = report.sampling
+    typer.echo(f"claim {report.claim_id}")
+    typer.echo(
+        f"model {model.name} @ {model.endpoint} ({model.backend}, revision {model.revision})"
+    )
+    typer.echo(f"endpoint build {model.endpoint_build}   tokenizer {model.tokenizer_name}")
+    typer.echo(f"chat template sha256:{report.chat_template.sha256} ({report.chat_template.source})")
+    typer.echo(
+        f"sampling temp {sampling.temperature}  top_p {sampling.top_p}  "
+        f"seed {sampling.seed}  max_tokens {sampling.max_tokens}"
+    )
+    if report.manifest is not None:
+        typer.echo(f"manifest sha256:{manifest_sha256(report.manifest)}")
+    else:
+        typer.echo("manifest sha256: not pinned (runs disagree)")
+
+
+def _write_ablation(
+    directory: Path, result: AblationResult
+) -> tuple[Path, Optional[Path], int]:
+    runs_dir = directory / "runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+
+    count = 0
+    for config_id, records in result.records.items():
+        for record in records:
+            _write_json(runs_dir / f"{config_id}.run{record['run']}.json", record)
+            count += 1
+
+    ablation_path = directory / "ablation.json"
+    _write_json(ablation_path, result.ablation.model_dump(mode="json"))
+
+    manifest_path = directory / "manifest.json"
+    if result.ablation.manifest is not None:
+        _write_json(manifest_path, result.ablation.manifest.model_dump(mode="json"))
+    else:
+        if manifest_path.exists():
+            manifest_path.unlink()
+        manifest_path = None
+    return ablation_path, manifest_path, count
+
+
+# -- report and verify -----------------------------------------------------
 
 
 @app.command()
 def report(
-    claim_path: Optional[Path] = typer.Argument(None, help="Path to claim.yaml."),
+    claim_path: Path = typer.Argument(
+        ..., exists=True, dir_okay=False, readable=True, help="Path to claim.yaml."
+    ),
+    out: Optional[Path] = typer.Option(
+        None,
+        "--out",
+        help="Directory for report.md/html. The sweep is read from here when it holds "
+        "one, otherwise from reports/<claim id> (default: reports/<claim id>).",
+    ),
 ) -> None:
-    """Write the verdict card as report.md and report.html (not implemented yet)."""
-    _not_implemented("report")
+    """Render the verdict card from a recorded ablation sweep."""
+    claim = _read_claim(claim_path)
+    target = out if out is not None else Path("reports") / claim.id
+    # The sweep belongs to the claim; --out chooses where the card is written.
+    source = target if (target / "ablation.json").is_file() else Path("reports") / claim.id
+
+    try:
+        ablation = load_ablation(source, claim)
+    except AblationError as exc:
+        _die(str(exc))
+
+    card = assemble(ablation)
+    markdown_path, html_path, json_path = write_report(card, target)
+    typer.echo(f"wrote {markdown_path}")
+    typer.echo(f"wrote {html_path}")
+    typer.echo(f"wrote {json_path}")
+    if card.status is Status.NO_VERDICT:
+        typer.echo(card.reason, err=True)
+    if card.exit_code != 0:
+        raise typer.Exit(card.exit_code)
+
+
+def _report_json_path(path: Path) -> Path:
+    if path.is_dir():
+        candidate = path / "report.json"
+    elif path.suffix == ".json":
+        candidate = path
+    else:
+        candidate = path.with_suffix(".json")
+    if not candidate.is_file():
+        _die(
+            f"no report.json at {candidate}: pass a report directory, report.json, "
+            "or report.md"
+        )
+    return candidate
 
 
 @app.command()
 def verify(
-    report_path: Optional[Path] = typer.Argument(None, help="Path to a report or manifest."),
+    report_path: Path = typer.Argument(
+        ...,
+        exists=True,
+        readable=True,
+        help="A report directory, report.json, or report.md.",
+    ),
+    endpoint: Optional[str] = typer.Option(
+        None, "--endpoint", help="Replay against this endpoint instead of the recorded one."
+    ),
+    runs: Optional[int] = typer.Option(
+        None, "--runs", "-n", help="Dispatches per row (default: the card's own count)."
+    ),
+    config: Optional[Path] = _CONFIG_OPTION,
+    fixture: bool = _FIXTURE_OPTION,
 ) -> None:
-    """Re-dispatch a manifest and print MATCH or DRIFT per row (not implemented yet)."""
-    _not_implemented("verify")
+    """Re-dispatch a card's recorded requests and print MATCH or DRIFT per row."""
+    json_path = _report_json_path(report_path)
+    try:
+        card = Report.model_validate_json(json_path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        _die(f"cannot read {json_path}: {exc}")
+    except ValidationError as exc:
+        _die(f"{json_path}: not a usable report: {exc}")
+
+    spec = ModelSpec.model_validate(
+        {
+            "name": card.model.name,
+            "endpoint": endpoint or card.model.endpoint,
+            "backend": card.model.backend,
+            "revision": card.model.revision,
+            "chat_template_sha": card.model.chat_template_sha,
+            "chat_template_path": None,
+        }
+    )
+    run_count = runs if runs is not None else card.runs_per_config
+    if run_count < 1:
+        _die(f"verify needs at least one dispatch per row, got {run_count}")
+
+    settings = _run_settings(config)
+    try:
+        with build_backend(
+            spec, fixture=_fixture_enabled(fixture), settings=settings
+        ) as backend:
+            result = verify_report(card, backend, run_count)
+    except BackendError as exc:
+        _die(str(exc))
+
+    _print_verify(json_path, card, result, run_count)
+    if result.exit_code != 0:
+        raise typer.Exit(result.exit_code)
+
+
+def _print_verify(json_path: Path, card: Report, result: VerifyResult, runs: int) -> None:
+    model = card.model
+    typer.echo(f"verify {json_path}")
+    typer.echo(
+        f"claim {card.claim_id}   model {model.name} @ {model.endpoint} "
+        f"({model.backend}, revision {model.revision})"
+    )
+    typer.echo(f"runs per row {runs}")
+    typer.echo("")
+    typer.echo(f"  {'row':<32}{'expected':<14}{'observed':<14}{'status'}")
+    for row in result.rows:
+        typer.echo(
+            f"  {row.label:<32}{_short_sha(row.expected_sha256):<14}"
+            f"{_short_sha(row.observed_sha256):<14}{row.status.value}"
+        )
+
+    typer.echo("")
+    if result.drifted:
+        typer.echo(
+            f"DRIFT {len(result.drifted)} of {len(result.rows)} rows differ"
+        )
+        for row in result.drifted:
+            typer.echo(
+                f"  {row.label}: expected {_short_sha(row.expected_sha256)}, "
+                f"observed {_short_sha(row.observed_sha256)}"
+                + (f" ({row.note})" if row.note else "")
+            )
+    else:
+        typer.echo(
+            f"MATCH {len(result.matched)} of {len(result.rows)} rows "
+            "(output hashes unchanged)"
+        )
+    if result.undecided:
+        typer.echo(
+            f"{len(result.undecided)} row(s) recorded as UNDECIDED were not compared"
+        )
 
 
 def main() -> None:
