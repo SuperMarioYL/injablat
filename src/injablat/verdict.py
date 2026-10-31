@@ -165,7 +165,21 @@ def _contribution(ablation: Ablation, span_id: str) -> Contribution:
             label=f"prefill[0:{ablation.prefill_tokens}]",
             tokens=ablation.prefill_tokens,
         )
-    return Contribution(span_id=span_id, label=span_id, tokens=None)
+    # Reuse the display label recorded on this span's deletion row, so a block
+    # keeps one name throughout the card.
+    deletion = next(
+        (
+            row
+            for row in ablation.rows
+            if row.kind is ConfigKind.DELETION and row.tested == span_id
+        ),
+        None,
+    )
+    return Contribution(
+        span_id=span_id,
+        label=deletion.label if deletion is not None else span_id,
+        tokens=None,
+    )
 
 
 class VerifyStatus(str, Enum):

@@ -52,6 +52,10 @@ class Span(BaseModel):
     id: str
     role: SpanRole
     text: str = Field(min_length=1)
+    # Optional display name for the verdict card. It defaults to the span id and
+    # exists because a source may name a block differently from its machine id
+    # (for example "few_shot[0:2]" for a few-shot block of two examples).
+    label: str | None = Field(default=None, min_length=1)
     # Measured by the tokenizer of the run the claim was recorded from, not by
     # this tool. validate re-measures and reports a difference instead of
     # silently trusting either number.

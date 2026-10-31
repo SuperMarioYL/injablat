@@ -39,7 +39,7 @@ from .prompt import (
     render_prompt,
     resolve_chat_template,
 )
-from .report import write_report
+from .report import extract_embedded_report, write_report
 from .verdict import Report, Status, VerifyResult, assemble, verify_report
 
 EXIT_NONDETERMINISTIC = 1
@@ -490,19 +490,54 @@ def report(
         raise typer.Exit(card.exit_code)
 
 
-def _report_json_path(path: Path) -> Path:
+def _load_report_card(path: Path) -> Report:
+    """Read a card from a directory, report.json, or report.md.
+
+    report.md carries the same JSON as report.json in a marked fenced block, so
+    the single file a recipient is sent is sufficient to verify it.
+    """
     if path.is_dir():
-        candidate = path / "report.json"
-    elif path.suffix == ".json":
-        candidate = path
-    else:
-        candidate = path.with_suffix(".json")
-    if not candidate.is_file():
+        json_candidate = path / "report.json"
+        if json_candidate.is_file():
+            return _parse_json_card(json_candidate)
+        markdown_candidate = path / "report.md"
+        if markdown_candidate.is_file():
+            return _parse_markdown_card(markdown_candidate)
         _die(
-            f"no report.json at {candidate}: pass a report directory, report.json, "
-            "or report.md"
+            f"no report.json or report.md in {path}: pass a report directory, "
+            "report.json, or report.md"
         )
-    return candidate
+    if path.suffix == ".json":
+        return _parse_json_card(path)
+    return _parse_markdown_card(path)
+
+
+def _parse_json_card(path: Path) -> Report:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        _die(f"cannot read {path}: {exc}")
+    try:
+        return Report.model_validate_json(text)
+    except ValidationError as exc:
+        _die(f"{path}: not a usable report: {exc}")
+
+
+def _parse_markdown_card(path: Path) -> Report:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        _die(f"cannot read {path}: {exc}")
+    payload = extract_embedded_report(text)
+    if payload is None:
+        _die(
+            f"{path}: no embedded card data (report.md written by 'injablat report' "
+            "carries it); pass report.json or the report directory instead"
+        )
+    try:
+        return Report.model_validate_json(payload)
+    except ValidationError as exc:
+        _die(f"{path}: embedded card data is not a usable report: {exc}")
 
 
 @app.command()
@@ -511,7 +546,7 @@ def verify(
         ...,
         exists=True,
         readable=True,
-        help="A report directory, report.json, or report.md.",
+        help="A report directory, report.json, or report.md with the embedded card data.",
     ),
     endpoint: Optional[str] = typer.Option(
         None, "--endpoint", help="Replay against this endpoint instead of the recorded one."
@@ -523,13 +558,7 @@ def verify(
     fixture: bool = _FIXTURE_OPTION,
 ) -> None:
     """Re-dispatch a card's recorded requests and print MATCH or DRIFT per row."""
-    json_path = _report_json_path(report_path)
-    try:
-        card = Report.model_validate_json(json_path.read_text(encoding="utf-8"))
-    except OSError as exc:
-        _die(f"cannot read {json_path}: {exc}")
-    except ValidationError as exc:
-        _die(f"{json_path}: not a usable report: {exc}")
+    card = _load_report_card(report_path)
 
     spec = ModelSpec.model_validate(
         {
@@ -554,14 +583,14 @@ def verify(
     except BackendError as exc:
         _die(str(exc))
 
-    _print_verify(json_path, card, result, run_count)
+    _print_verify(report_path, card, result, run_count)
     if result.exit_code != 0:
         raise typer.Exit(result.exit_code)
 
 
-def _print_verify(json_path: Path, card: Report, result: VerifyResult, runs: int) -> None:
+def _print_verify(source_path: Path, card: Report, result: VerifyResult, runs: int) -> None:
     model = card.model
-    typer.echo(f"verify {json_path}")
+    typer.echo(f"verify {source_path}")
     typer.echo(
         f"claim {card.claim_id}   model {model.name} @ {model.endpoint} "
         f"({model.backend}, revision {model.revision})"

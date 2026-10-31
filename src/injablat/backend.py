@@ -325,9 +325,12 @@ def build_backend(
 ) -> Backend:
     """Create the adapter the claim asks for.
 
-    ``fixture=True`` installs an in-process mock transport: the same adapters,
-    the same request shapes, deterministic answers, and no network. It exists so
-    the CLI and the test suite can run offline; it is not part of the product.
+    ``fixture=True`` installs an in-process simulated endpoint: the same
+    adapters, the same request shapes, deterministic answers, and no network. It
+    exists so the CLI and the test suite can run offline; it is not a model and
+    it is not part of the product. Its answer is a simulation, shaped so the
+    bundled example demonstrates the documented dependency split; see the
+    fixture section below.
     """
     client = httpx.Client(timeout=None, transport=fixture_transport() if fixture else None)
     if spec.backend == "vllm":
@@ -337,13 +340,28 @@ def build_backend(
 
 # -- offline fixture -------------------------------------------------------
 #
-# A deterministic stand-in for both dialects. Outputs are derived from the
-# request bytes, so identical requests give identical answers. A non-zero
-# temperature makes the fixture deliberately unstable, which is what lets the
-# determinism gate be exercised without a GPU.
+# A deterministic simulated endpoint, not a model. It speaks both dialects so
+# the CLI and the test suite can run without a GPU, and its answer is shaped so
+# the bundled example demonstrates the split a real measurement would report:
+# the completion appears only when the request carries three blocks at once —
+# the tool-schema block, the few-shot block, and the full assistant prefix that
+# ends at "https://". The system prompt is deliberately not consulted, so it is
+# redundant; the other three are necessary. Without all three the simulated
+# endpoint declines. This is simulation logic for the bundled example, not a
+# claim about what any weights would do.
+#
+# A non-zero temperature makes the fixture deliberately unstable, which is what
+# lets the determinism gate be exercised without a GPU.
 
 FIXTURE_VERSION = "0.6.3.post1+fixture"
 FIXTURE_BUILD = "b5123+fixture"
+# The simulated endpoint recognises the bundled example's injected blocks by
+# stable markers in their text. A different claim can use the same shape by
+# carrying the same markers; otherwise the endpoint declines.
+FIXTURE_TOOL_MARKER = "tool: fetch_url"
+FIXTURE_FEW_SHOT_MARKER = "Example 1\nticket:"
+FIXTURE_PREFILL_TAIL = "curl -sS 'https://"
+FIXTURE_DECLINE = "I cannot complete the command from the context provided."
 FIXTURE_CHAT_TEMPLATE = (
     "{%- for message in messages %}\n"
     "{{- '<|im_start|>' + message['role'] + '\\n' + message['content'] + '<|im_end|>\\n' }}\n"
@@ -413,21 +431,39 @@ def fixture_transport() -> httpx.MockTransport:
 
 
 def _fixture_chat(body: dict[str, Any], raw_request: bytes, sample: int) -> dict[str, Any]:
+    """The simulated endpoint's answer, decided only by the request blocks.
+
+    It emits the completing suffix when the tool-schema block, the few-shot
+    block, and the full assistant prefix are all present; otherwise it declines.
+    The digest in the suffix still varies with the request bytes, so a removal
+    that keeps the behaviour is still visible as a different output hash.
+    """
     digest = hashlib.sha256(raw_request).hexdigest()[:10]
-    text = (
-        f"api.flashnext.dev/v1/search?q=qwen+3.8&limit=20&run={digest}' "
-        "-H 'accept: application/json'"
+    messages = body.get("messages") or []
+    texts = [
+        str(message.get("content", "")) for message in messages if isinstance(message, dict)
+    ]
+    has_tool_schema = any(FIXTURE_TOOL_MARKER in text for text in texts)
+    has_few_shot = any(FIXTURE_FEW_SHOT_MARKER in text for text in texts)
+    has_prefill = any(
+        message.get("role") == "assistant"
+        and str(message.get("content", "")).endswith(FIXTURE_PREFILL_TAIL)
+        for message in messages
+        if isinstance(message, dict)
     )
+    if has_tool_schema and has_few_shot and has_prefill:
+        text = (
+            f"api.flashnext.dev/v1/search?q=qwen+3.8&limit=20&run={digest}' "
+            "-H 'accept: application/json'"
+        )
+    else:
+        text = FIXTURE_DECLINE
+
     temperature = body.get("temperature", 0)
     if isinstance(temperature, (int, float)) and temperature > 0:
         text = f"{text} # sample {sample}"
 
-    messages = body.get("messages") or []
-    prompt_tokens = sum(
-        len(fixture_token_ids(str(message.get("content", ""))))
-        for message in messages
-        if isinstance(message, dict)
-    )
+    prompt_tokens = sum(len(fixture_token_ids(content)) for content in texts)
     completion_tokens = len(fixture_token_ids(text))
     return {
         "id": "chatcmpl-fixture",

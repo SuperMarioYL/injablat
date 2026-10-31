@@ -13,11 +13,17 @@ from __future__ import annotations
 
 import html
 import json
+import shlex
 from pathlib import Path
 
 from .claim import Detector
 from .manifest import manifest_sha256
-from .verdict import Report
+from .verdict import Report, Status
+
+# The embedded card block is how a lone report.md stays machine-readable:
+# ``verify`` finds this marker and parses the fenced JSON that follows it.
+EMBED_MARKER = "<!-- injablat:card-json -->"
+EMBED_FENCE = "```json injablat-report"
 
 
 def write_report(report: Report, directory: Path) -> tuple[Path, Path, Path]:
@@ -27,14 +33,60 @@ def write_report(report: Report, directory: Path) -> tuple[Path, Path, Path]:
     html_path = directory / "report.html"
     json_path = directory / "report.json"
 
-    markdown_path.write_text(render_markdown(report), encoding="utf-8")
-    html_path.write_text(render_html(report), encoding="utf-8")
-    json_path.write_text(
-        json.dumps(report.model_dump(mode="json"), indent=2, sort_keys=True, ensure_ascii=False)
-        + "\n",
-        encoding="utf-8",
-    )
+    # The card names the place it was written, so its verify command works as
+    # printed even when --out is not the default.
+    verify_target = str(directory)
+    markdown_path.write_text(render_markdown(report, verify_target), encoding="utf-8")
+    html_path.write_text(render_html(report, verify_target), encoding="utf-8")
+    json_path.write_text(_card_json(report) + "\n", encoding="utf-8")
     return markdown_path, html_path, json_path
+
+
+def _card_json(report: Report) -> str:
+    return json.dumps(
+        report.model_dump(mode="json"), indent=2, sort_keys=True, ensure_ascii=False
+    )
+
+
+def extract_embedded_report(markdown: str) -> str | None:
+    """Return the card JSON embedded in a report.md, or None when it has none."""
+    marker = markdown.rfind(EMBED_MARKER)
+    if marker == -1:
+        return None
+    rest = markdown[marker + len(EMBED_MARKER) :].lstrip("\r\n")
+    if not rest.startswith(EMBED_FENCE):
+        return None
+    body = rest[len(EMBED_FENCE) :]
+    if body.startswith("\r\n"):
+        body = body[2:]
+    elif body.startswith("\n"):
+        body = body[1:]
+    closing = body.rfind("\n```")
+    if closing == -1:
+        return None
+    return body[:closing]
+
+
+def _pinned_text(report: Report) -> str:
+    """How many rows carry a pin. A NO_VERDICT card pins nothing."""
+    if report.status is Status.NO_VERDICT:
+        return "No verdict was reached, so no output hash is presented as a pin."
+    pinned = sum(1 for row in report.rows if row.output_sha256 is not None)
+    return f"{pinned} pinned, {len(report.rows) - pinned} undecided."
+
+
+def _is_fixture(report: Report) -> bool:
+    return "fixture" in report.model.endpoint_build.lower()
+
+
+def _fixture_note() -> str:
+    return (
+        "This card was produced by the bundled simulated endpoint, not by a vLLM "
+        "process; the endpoint build is tagged +fixture. It demonstrates the "
+        "ablation mechanism on a synthetic example, not the behaviour of released "
+        "weights. To measure a real endpoint, re-run injablat ablate on the claim "
+        "without the offline fixture against a vLLM server."
+    )
 
 
 # -- shared formatting -----------------------------------------------------
@@ -80,7 +132,7 @@ def _prefill_question(report: Report) -> str | None:
 # -- markdown --------------------------------------------------------------
 
 
-def render_markdown(report: Report) -> str:
+def render_markdown(report: Report, verify_target: str) -> str:
     model = report.model
     sampling = report.sampling
     lines: list[str] = [
@@ -106,6 +158,12 @@ def render_markdown(report: Report) -> str:
         lines.append(f"| manifest | `sha256:{manifest_sha256(report.manifest)}` |")
     else:
         lines.append("| manifest | not pinned (runs disagree) |")
+
+    if _is_fixture(report):
+        lines += [
+            "",
+            f"> **Offline fixture card.** {_fixture_note()}",
+        ]
 
     lines += [
         "",
@@ -186,12 +244,36 @@ def render_markdown(report: Report) -> str:
         "",
         "## Reproduce or refute this card",
         "",
-        f"    injablat verify reports/{report.claim_id}",
+        f"    injablat verify {shlex.quote(verify_target)}",
         "",
-        "`verify` re-dispatches the request bytes recorded for every row against the same",
-        "stack and prints MATCH or DRIFT per row. MATCH means the output hash is unchanged,",
-        "not that the claim is endorsed. A single DRIFT row means the endpoint is no longer",
-        "the stack this card was measured on, or the weights changed.",
+    ]
+    if report.status is Status.NO_VERDICT:
+        lines += [
+            "No verdict was reached: the runs disagreed, so this card holds no output",
+            "hash to compare. `verify` still replays every recorded request and reports",
+            "each row as UNDECIDED.",
+            "",
+            _pinned_text(report),
+            "",
+        ]
+    else:
+        lines += [
+            "`verify` re-dispatches the request bytes recorded for every row against the same",
+            "stack and prints MATCH or DRIFT per row. MATCH means the output hash is unchanged,",
+            "not that the claim is endorsed. A single DRIFT row means the endpoint is no longer",
+            "the stack this card was measured on, or the weights changed.",
+            "",
+            _pinned_text(report),
+            "",
+        ]
+
+    # Machine-readable copy, so a recipient who keeps only report.md can still
+    # run ``injablat verify report.md``.
+    lines += [
+        EMBED_MARKER,
+        EMBED_FENCE,
+        _card_json(report),
+        "```",
         "",
     ]
     return "\n".join(lines)
@@ -384,7 +466,7 @@ def _html_summary(report: Report) -> str:
     return f'<dl class="grid">{body}</dl>'
 
 
-def render_html(report: Report) -> str:
+def render_html(report: Report, verify_target: str) -> str:
     prefill = _prefill_question(report)
     minimal = _minimal_text(report)
     manifest_json = (
@@ -399,6 +481,27 @@ def render_html(report: Report) -> str:
         if prefill is not None
         else ""
     )
+    fixture_line = (
+        f'<p class="note fixture"><strong>Offline fixture card.</strong> '
+        f"{_e(_fixture_note())}</p>"
+        if _is_fixture(report)
+        else ""
+    )
+    if report.status is Status.NO_VERDICT:
+        verify_panel = (
+            '<div class="kv">No verdict was reached: the runs disagreed, so this card '
+            "holds no output hash to compare. <code>verify</code> still replays every "
+            "recorded request and reports each row as UNDECIDED.</div>"
+            f'<div class="kv note">{_e(_pinned_text(report))}</div>'
+        )
+    else:
+        verify_panel = (
+            '<div class="kv"><strong>MATCH</strong> — every pinned output hash is unchanged.</div>'
+            '<div class="kv"><strong>DRIFT</strong> — at least one row\'s output hash changed; '
+            "the endpoint is no longer the stack this card was measured on, or the weights moved.</div>"
+            f'<div class="kv note">A MATCH is not an endorsement of the claim: it only means the '
+            f"ablation is reproducible. {_e(_pinned_text(report))}</div>"
+        )
 
     return f"""<!doctype html>
 <html lang="en">
@@ -414,6 +517,8 @@ def render_html(report: Report) -> str:
 <p class="sub">Detector: <strong>{_detector_html(report.detector)}</strong></p>
 
 {_html_summary(report)}
+
+{fixture_line}
 
 <h2>Verdict</h2>
 <div class="verdict-box">
@@ -469,12 +574,8 @@ the intersection of two minimal sets is non-empty, the shared spans are still lo
 <h2>Verify this card</h2>
 <div class="verify">
   <div class="kv">Another machine re-dispatches the recorded request bytes and compares output hashes row by row.</div>
-  <code class="cmd">injablat verify reports/{_e(report.claim_id)}</code>
-  <div class="kv"><strong>MATCH</strong> — every pinned output hash is unchanged.</div>
-  <div class="kv"><strong>DRIFT</strong> — at least one row's output hash changed; the endpoint is no longer
-  the stack this card was measured on, or the weights moved.</div>
-  <div class="kv note">A MATCH is not an endorsement of the claim: it only means the ablation is
-  reproducible. {len(report.rows)} row(s) are pinned in this card.</div>
+  <code class="cmd">injablat verify {_e(shlex.quote(verify_target))}</code>
+  {verify_panel}
 </div>
 
 <h2>Manifest</h2>

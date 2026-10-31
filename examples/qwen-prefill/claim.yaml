@@ -1,20 +1,34 @@
-# A claim reproduced from the published Flash Next prefill dispute.
+# A synthetic, self-contained example modelled on a public prefill dispute.
 #
-# The published claim: Qwen 3.8 Flash Next completes partial cURL commands.
-# The disputed run prefilled 2,232 tokens immediately before the URL, so the
-# question this claim asks is whether the command still appears once that
-# assistant prefix is removed. Reproduction alone does not answer it.
+# This is not a recorded release and not a captured trace. Every span below was
+# written for this example, and the token counts are those of the bundled
+# offline fixture's word-piece tokenizer, not of any Qwen tokenizer. The shape
+# mirrors the public claim that a model completes partial cURL commands after a
+# long assistant prefix, so the question the example asks is still the real one:
+# does the behaviour survive without that prefix?
+#
+# The bundled fake backend is a simulated endpoint (see src/injablat/backend.py)
+# whose answer depends on the tool-schema block, the few-shot block, and the full
+# prefix. Running this claim with `--fixture` therefore demonstrates the ablation
+# mechanism, not the behaviour of released weights. To measure a real endpoint,
+# point model.endpoint at a vLLM server serving the same model, re-record the
+# token counts from that endpoint's /tokenize, and run `injablat ablate` without
+# `--fixture`.
 
 id: qwen-prefill-curl
 
 description: >-
-  The released trace ends with a 2,232-token assistant prefix that stops at the
-  first character of the URL. The claim on the table is that the model completes
-  partial cURL commands; the claim under test is whether the injected prefix is
-  what makes it do so.
+  A synthetic, self-contained example modelled on the public Flash Next prefill
+  dispute. It is not a recorded release: the transcript and its token counts are
+  written for this example, and the counts come from the bundled offline
+  fixture's word-piece tokenizer. The claim on the table is that the model
+  completes partial cURL commands; the claim under test is whether the injected
+  prefix and the supporting blocks are what make it do so.
 
 model:
   name: qwen3-8b-instruct
+  # The vLLM dialect. With `--fixture` no vLLM process is contacted; the card's
+  # endpoint build is tagged `+fixture` to say so.
   endpoint: http://127.0.0.1:8000
   backend: vllm
   revision: qwen3-8b-instruct-2026-10-14

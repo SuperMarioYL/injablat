@@ -40,9 +40,9 @@ def test_verify_matches_the_stored_card(tmp_path: Path) -> None:
     result = runner.invoke(app, ["verify", str(out), "--fixture"])
 
     assert result.exit_code == 0, result.output
-    assert "MATCH 11 of 11 rows" in result.output
+    assert "MATCH 10 of 10 rows" in result.output
     assert "DRIFT" not in result.output
-    assert "prefill[0:0]" in result.output
+    assert "prefill[0:2232]" in result.output
 
 
 def test_verify_needs_only_the_report(tmp_path: Path) -> None:
@@ -53,7 +53,19 @@ def test_verify_needs_only_the_report(tmp_path: Path) -> None:
 
     result = runner.invoke(app, ["verify", str(detached / "report.json"), "--fixture"])
     assert result.exit_code == 0, result.output
-    assert "MATCH 11 of 11 rows" in result.output
+    assert "MATCH 10 of 10 rows" in result.output
+
+
+def test_verify_needs_only_the_markdown(tmp_path: Path) -> None:
+    """The card a recipient is sent is report.md; it must be verifiable alone."""
+    out = _prepare(tmp_path)
+    detached = tmp_path / "md-only"
+    detached.mkdir()
+    shutil.copy(out / "report.md", detached / "report.md")
+
+    result = runner.invoke(app, ["verify", str(detached / "report.md"), "--fixture"])
+    assert result.exit_code == 0, result.output
+    assert "MATCH 10 of 10 rows" in result.output
 
 
 def test_verify_reports_drift_on_a_changed_row(tmp_path: Path) -> None:
@@ -62,7 +74,7 @@ def test_verify_reports_drift_on_a_changed_row(tmp_path: Path) -> None:
     card = json.loads(path.read_text(encoding="utf-8"))
     drifted_label = None
     for row in card["rows"]:
-        if row["label"] == "prefill[0:0]":
+        if row["label"] == "prefill[0:2232]":
             row["output_sha256"] = "f" * 64
             drifted_label = row["label"]
     assert drifted_label is not None
@@ -71,7 +83,7 @@ def test_verify_reports_drift_on_a_changed_row(tmp_path: Path) -> None:
     result = runner.invoke(app, ["verify", str(out), "--fixture"])
 
     assert result.exit_code == 1, result.output
-    assert "DRIFT 1 of 11 rows differ" in result.output
+    assert "DRIFT 1 of 10 rows differ" in result.output
     assert f"{drifted_label}: expected ffffffff..." in result.output
     assert "output hash changed" in result.output
 

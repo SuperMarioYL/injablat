@@ -379,7 +379,10 @@ def ablate_claim(claim: Claim, backend: Backend, runs: int) -> AblationResult:
         for span_id in order:
             span = by_id[span_id]
             keep_ids = [item for item in all_ids if item not in dropped and item != span_id]
-            label = "prefill[0:0]" if span.role == "prefill" else span_id
+            # Name the block being removed the way the claim names it. The
+            # fallback keeps older claims readable: a prefill without a label is
+            # shown as truncated to zero.
+            label = span.label or ("prefill[0:0]" if span.role == "prefill" else span_id)
             measurement = sweeper.measure(f"drop-{span_id}", keep_ids=keep_ids, prefill_prefix=None)
             if measurement.behavior is Behavior.FIRED:
                 role = Role.REDUNDANT
