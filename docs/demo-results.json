@@ -1,0 +1,114 @@
+{
+  "product": "injablat",
+  "version": "0.1.0",
+  "captured_at": "2026-10-31",
+  "mode": "offline-fixture",
+  "note": "Captured from a real run of the documented quickstart in the repository root. The bundled fixture answers locally, so no endpoint, GPU, or network is involved. It demonstrates the ablation mechanism on a synthetic example, not the behaviour of released weights.",
+  "workspace": "repository root",
+  "runtime": {
+    "python": "3.12",
+    "platform": "macOS arm64",
+    "entry_point": "injablat"
+  },
+  "demo_cast": "./docs/demo.cast",
+  "commands": [
+    {
+      "id": "validate",
+      "command": "injablat validate examples/qwen-prefill/claim.yaml --fixture",
+      "exit_code": 0,
+      "key_output": {
+        "claim": "qwen-prefill-curl",
+        "model": "qwen3-8b-instruct",
+        "backend": "vllm",
+        "endpoint_build": "vllm/0.6.3.post1+fixture",
+        "revision": "qwen3-8b-instruct-2026-10-14",
+        "chat_template_sha256": "2f66f42bc859b624c6c8eace91554dddd901c58484a245a7ad64fa51b1fa3ffa",
+        "chat_template_source": "claim",
+        "spans_total": 5,
+        "spans_injected": 4,
+        "spans_user_prompt": 1,
+        "span_tokens": {
+          "system-review-rules": 283,
+          "tool-fetch-url": 207,
+          "few-shots": 105,
+          "task-curl": 25,
+          "prefix-transcript": 2232
+        },
+        "rendered_messages": 5,
+        "prompt_tokens": 2902
+      }
+    },
+    {
+      "id": "replay",
+      "command": "injablat replay examples/qwen-prefill/claim.yaml --runs 2 --fixture",
+      "exit_code": 0,
+      "key_output": {
+        "prompt_tokens": 2902,
+        "prompt_token_sha256": "b71c763dcb862ad359495dd0e1767b19f1f616ceee7218f9032f9f66d964cd63",
+        "tokenizer": "qwen3-8b-instruct",
+        "tokenizer_probe_sha256": "011e0f1b93ebbcc2370edb8fb2c02cf5b65639150fafd94e7d923f0b03cdada3",
+        "manifest_sha256": "8c5885884957544c421ea15c3a1c227b585c3f6af29d391851517d5e89b46127",
+        "determinism": "DETERMINISTIC",
+        "runs_per_config": 2
+      }
+    },
+    {
+      "id": "ablate",
+      "command": "injablat ablate examples/qwen-prefill/claim.yaml --runs 2 --fixture",
+      "exit_code": 0,
+      "key_output": {
+        "determinism": "DETERMINISTIC",
+        "determinism_detail": "repeat runs are byte-identical for every configuration",
+        "rows": [
+          {"remove_span": "(bare prompt)", "behavior": "NOT_FIRED", "output_sha": "7d554cf3", "role": "baseline"},
+          {"remove_span": "(nothing removed)", "behavior": "FIRED", "output_sha": "c73ca629", "role": "reproduces"},
+          {"remove_span": "prefill[0:2232]", "behavior": "NOT_FIRED", "output_sha": "7d554cf3", "role": "necessary"},
+          {"remove_span": "system", "behavior": "FIRED", "output_sha": "d670c441", "role": "redundant"},
+          {"remove_span": "tool_schema", "behavior": "NOT_FIRED", "output_sha": "7d554cf3", "role": "necessary"},
+          {"remove_span": "few_shot[0:2]", "behavior": "NOT_FIRED", "output_sha": "7d554cf3", "role": "necessary"},
+          {"remove_span": "prefill[0:558]", "behavior": "NOT_FIRED", "output_sha": "7d554cf3", "role": "insufficient"},
+          {"remove_span": "prefill[0:1116]", "behavior": "NOT_FIRED", "output_sha": "7d554cf3", "role": "insufficient"},
+          {"remove_span": "prefill[0:1674]", "behavior": "NOT_FIRED", "output_sha": "7d554cf3", "role": "insufficient"},
+          {"remove_span": "(minimal set)", "behavior": "FIRED", "output_sha": "d670c441", "role": "verified"}
+        ],
+        "minimal_sufficient": ["prefill[0:2232]", "tool_schema", "few_shot[0:2]"],
+        "survives_without_prefill": false,
+        "run_records": 20
+      }
+    },
+    {
+      "id": "report",
+      "command": "injablat report examples/qwen-prefill/claim.yaml",
+      "exit_code": 0,
+      "key_output": {
+        "files": [
+          "reports/qwen-prefill-curl/report.md",
+          "reports/qwen-prefill-curl/report.html",
+          "reports/qwen-prefill-curl/report.json"
+        ]
+      }
+    },
+    {
+      "id": "verify",
+      "command": "injablat verify reports/qwen-prefill-curl --fixture",
+      "exit_code": 0,
+      "key_output": {
+        "runs_per_row": 2,
+        "rows": 10,
+        "matched": 10,
+        "drifted": 0,
+        "undecided": 0,
+        "summary": "MATCH 10 of 10 rows (output hashes unchanged)"
+      }
+    }
+  ],
+  "verdict": {
+    "claim": "qwen-prefill-curl",
+    "detector": "regex curl -sS 'https://[^']+'",
+    "manifest_sha256": "8c5885884957544c421ea15c3a1c227b585c3f6af29d391851517d5e89b46127",
+    "determinism": "DETERMINISTIC",
+    "minimal_sufficient": ["prefill[0:2232]", "tool_schema", "few_shot[0:2]"],
+    "survives_without_prefill": false,
+    "replay_match": {"matched": 10, "rows": 10}
+  }
+}
