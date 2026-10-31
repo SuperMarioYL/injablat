@@ -31,6 +31,9 @@ dependencies = [
   "httpx>=0.27,<0.28",
   "pydantic>=2.7,<3",
   "typer>=0.12,<0.13",
+  # typer 0.12 calls click's Parameter.make_metavar() without the ctx argument
+  # that click 8.2 added; keep the pair on the API typer 0.12 was written against.
+  "click>=8.1,<8.2",
   "pyyaml>=6.0,<7",
   "jinja2>=3.1,<4",
   "rich>=13.7,<14",
