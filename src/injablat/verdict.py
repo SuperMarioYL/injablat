@@ -218,7 +218,11 @@ class VerifyResult(BaseModel):
 
     @property
     def exit_code(self) -> int:
-        return 1 if self.drifted else 0
+        # 0 means every recorded row was compared and matched. A row with no
+        # pinned output hash cannot be compared, so it is not a pass.
+        if not self.rows or self.drifted or self.undecided:
+            return 1
+        return 0
 
 
 def verify_report(report: Report, backend: Backend, runs: int) -> VerifyResult:

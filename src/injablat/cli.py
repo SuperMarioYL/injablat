@@ -615,12 +615,17 @@ def _print_verify(source_path: Path, card: Report, result: VerifyResult, runs: i
                 f"observed {_short_sha(row.observed_sha256)}"
                 + (f" ({row.note})" if row.note else "")
             )
-    else:
+    elif result.matched:
         typer.echo(
             f"MATCH {len(result.matched)} of {len(result.rows)} rows "
             "(output hashes unchanged)"
         )
-    if result.undecided:
+    else:
+        typer.echo(
+            f"UNDECIDED {len(result.undecided)} of {len(result.rows)} rows: "
+            "no pinned output hash, so nothing was compared"
+        )
+    if result.undecided and (result.drifted or result.matched):
         typer.echo(
             f"{len(result.undecided)} row(s) recorded as UNDECIDED were not compared"
         )

@@ -27,7 +27,7 @@ import jinja2
 from jinja2 import Environment, Undefined
 
 from .backend import Backend
-from .claim import Claim, Span
+from .claim import Claim
 
 _MESSAGE_ROLE: dict[str, str] = {
     "system": "system",
@@ -170,10 +170,3 @@ def longest_prefix(
         else:
             high = middle - 1
     return best
-
-
-def truncation_ladder(
-    span: Span, tokenize: Callable[[str], Sequence[int]]
-) -> list[PrefixSlice]:
-    """Every measured step of a prefill span's prefix ladder, ascending."""
-    return [longest_prefix(span.text, budget, tokenize) for budget in span.truncations]

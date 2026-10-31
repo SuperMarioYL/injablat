@@ -35,6 +35,11 @@ model:
   # The template is shipped with this example as a plain ChatML-style file. It
   # is not read from the replay endpoint: the prompt must be identical to the
   # recorded one, so the claim carries the exact bytes and pins their hash.
+  # To measure different weights, either replace this file with their exact
+  # template bytes and update chat_template_sha to the new file's sha256, or
+  # remove chat_template_path and let the endpoint serve the template (vLLM
+  # needs --enable-tokenizer-info-endpoint), pinning the served template's hash.
+  # Changing only chat_template_sha while keeping this file is rejected on drift.
   chat_template_path: templates/chat_template.jinja
   chat_template_sha: 2f66f42bc859b624c6c8eace91554dddd901c58484a245a7ad64fa51b1fa3ffa
 

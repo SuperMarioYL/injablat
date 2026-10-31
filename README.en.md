@@ -69,7 +69,12 @@ To measure a real endpoint, start an OpenAI-compatible server:
 vllm serve Qwen/Qwen3-8B-Instruct --port 8000 --seed 0 --max-model-len 8192
 ```
 
-Then replace `model.endpoint`, `model.revision`, and `chat_template_sha` in `examples/qwen-prefill/claim.yaml` with the values for those weights, keep the claim's own chat template, and run the same commands without `--fixture`. The template travels with the claim. If the claim has no template and the endpoint does not provide one, `validate` exits with an error instead of guessing.
+Then replace `model.endpoint` and `model.revision` in `examples/qwen-prefill/claim.yaml` with the values for those weights, and pin the template in one of two ways:
+
+- overwrite `templates/chat_template.jinja` with the target weights' exact template bytes and set `chat_template_sha` to that file's sha256; or
+- remove `model.chat_template_path` and let the endpoint serve the template (vLLM needs `--enable-tokenizer-info-endpoint`), setting `chat_template_sha` to the sha256 of the served template.
+
+`validate` recomputes the hash of the template file or the served template and exits 2 when it differs from `chat_template_sha`, so changing only the hash while keeping the old template is rejected. Then run the same commands without `--fixture`. If the claim has no template and the endpoint does not provide one, `validate` exits with an error instead of guessing.
 
 llama.cpp uses the same `/v1/chat/completions` surface: set `backend` to `llamacpp` and point the claim at `llama-server`. Prefill ablation is out of scope for v0.1; see "Limitations and known boundaries".
 
@@ -123,7 +128,7 @@ A `Claim` pins a published statement together with the context that was injected
 
 The `Manifest` is the core of verifiability, not decorative metadata. It records the model revision, the endpoint build string (vLLM's `GET /version` or llama.cpp's `build_info` from `GET /props`), the chat template hash, the tokenizer name, the tokenizer probe hash, the prompt token-id hash, the sampling parameters, the request hash of the serialized messages, and the output hash. Prompt token ids come only from the backend's `/tokenize` response, never from the chat response.
 
-Every request is written to `reports/<claim>/runs/<config>.run<N>.json` with the request bytes, response bytes, elapsed time, and output sha256. `report.md`, `report.html`, and `verify` read only those files, so every card traces back to a specific HTTP exchange.
+Every request is written to `reports/<claim>/runs/<config>.run<N>.json` with the request bytes, response bytes, elapsed time, and output sha256. `report` renders the card from the recorded sweep `ablation.json`, whose rows carry the request body and output hash; `verify` reads the card JSON (`report.json`, or the same JSON embedded in `report.md`). Both trace back to recorded HTTP exchanges without re-deriving evidence.
 
 ### Re-runs and determinism
 
@@ -173,7 +178,7 @@ Each card row also carries a role that says why it was run:
 
 ### Minimal sufficient injection
 
-The search is greedy: remove one span; if the behaviour disappears, keep the removal, otherwise put it back; then dispatch the final set once more. The request count is O(number of spans), not O(2^n).
+The search is greedy: remove one span; if the behaviour still fires, keep the removal (`REDUNDANT`); if it disappears, restore the span (`NECESSARY`); then dispatch the final set once more. The request count is O(number of spans), not O(2^n).
 
 The minimal sufficient set is not unique. The greedy search gives one solution, not all solutions. The report keeps every search-path row and the deletion order, so the other side can re-run under a different order; as long as the intersection of two minimal sets is non-empty, the shared spans are still load-bearing.
 
@@ -185,11 +190,11 @@ The minimal sufficient set is not unique. The greedy search gives one solution, 
 | `injablat replay <claim>` | re-dispatch, write the manifest, run the determinism gate | `--runs`, `--out` |
 | `injablat ablate <claim>` | deletion sweep, prefill ladder, greedy minimal-set search | `--runs`, `--out` |
 | `injablat report <claim>` | render `report.md`, `report.html`, and `report.json` from a recorded sweep | `--out` |
-| `injablat verify <report>` | re-dispatch the card's recorded requests and print `MATCH` or `DRIFT` per row | `--endpoint`, `--runs` |
+| `injablat verify <report>` | re-dispatch the card's recorded requests and print `MATCH`, `DRIFT`, or `UNDECIDED` per row | `--endpoint`, `--runs` |
 
 `verify` accepts a report directory, `report.json`, or `report.md`. `report.md` embeds the same card data as `report.json`, so the recipient only needs one file.
 
-Exit codes: `0` a verdict was produced; `1` no verdict (nondeterminism or drift); `2` claim, template, or endpoint error.
+Exit codes: `0` a verdict was produced; `1` no verdict (nondeterminism, drift, or no row left to compare); `2` claim, template, or endpoint error.
 
 `--fixture` is the local simulated endpoint for offline walkthroughs and is hidden from `--help`. It calls no real endpoint, and the card tags the endpoint build with `+fixture`.
 

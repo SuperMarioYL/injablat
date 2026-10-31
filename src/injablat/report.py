@@ -6,7 +6,7 @@ card can be traced back to a concrete HTTP exchange in ``runs/``.
 
 The HTML is self-contained: inline CSS, no scripts, no external fonts. It exists
 so the card can be attached to a review, and its verification panel names the
-exact command that turns it into MATCH or DRIFT.
+exact command that turns it into MATCH or DRIFT against the stack it recorded.
 """
 
 from __future__ import annotations
@@ -68,15 +68,34 @@ def extract_embedded_report(markdown: str) -> str | None:
 
 
 def _pinned_text(report: Report) -> str:
-    """How many rows carry a pin. A NO_VERDICT card pins nothing."""
-    if report.status is Status.NO_VERDICT:
-        return "No verdict was reached, so no output hash is presented as a pin."
+    """How many rows carry a pin that verify can compare against."""
     pinned = sum(1 for row in report.rows if row.output_sha256 is not None)
+    if pinned == 0:
+        return "No verdict was reached, so no output hash is presented as a pin."
     return f"{pinned} pinned, {len(report.rows) - pinned} undecided."
 
 
 def _is_fixture(report: Report) -> bool:
     return "fixture" in report.model.endpoint_build.lower()
+
+
+def _verify_command(report: Report, target: str) -> str:
+    """The command that re-dispatches this card from where it was written.
+
+    A fixture card names the bundled simulated endpoint; a real card names the
+    recorded stack, so the reader must supply an endpoint that serves it.
+    """
+    target_arg = shlex.quote(target)
+    if _is_fixture(report):
+        return f"injablat verify {target_arg} --fixture"
+    return f"injablat verify {target_arg} --endpoint <your-endpoint>"
+
+
+def _lone_file_command(report: Report) -> str:
+    """The same command for a recipient who has only report.md."""
+    if _is_fixture(report):
+        return "injablat verify report.md --fixture"
+    return "injablat verify report.md --endpoint <your-endpoint>"
 
 
 def _fixture_note() -> str:
@@ -244,28 +263,34 @@ def render_markdown(report: Report, verify_target: str) -> str:
         "",
         "## Reproduce or refute this card",
         "",
-        f"    injablat verify {shlex.quote(verify_target)}",
+        f"    {_verify_command(report, verify_target)}",
         "",
     ]
     if report.status is Status.NO_VERDICT:
         lines += [
-            "No verdict was reached: the runs disagreed, so this card holds no output",
-            "hash to compare. `verify` still replays every recorded request and reports",
-            "each row as UNDECIDED.",
+            "No verdict was reached: no output hash is pinned for the rows that could not",
+            "be decided. `verify` does not replay those rows; it reports them as UNDECIDED",
+            "and exits non-zero.",
             "",
             _pinned_text(report),
             "",
         ]
     else:
         lines += [
-            "`verify` re-dispatches the request bytes recorded for every row against the same",
-            "stack and prints MATCH or DRIFT per row. MATCH means the output hash is unchanged,",
-            "not that the claim is endorsed. A single DRIFT row means the endpoint is no longer",
-            "the stack this card was measured on, or the weights changed.",
+            "`verify` re-dispatches the request bytes recorded for every pinned row against",
+            "the same stack and prints MATCH or DRIFT per row. MATCH means the output hash is",
+            "unchanged, not that the claim is endorsed. A single DRIFT row means the endpoint",
+            "is no longer the stack this card was measured on, or the weights changed.",
             "",
             _pinned_text(report),
             "",
         ]
+    lines += [
+        "If you were sent only `report.md`, point the same command at that file:",
+        "",
+        f"    {_lone_file_command(report)}",
+        "",
+    ]
 
     # Machine-readable copy, so a recipient who keeps only report.md can still
     # run ``injablat verify report.md``.
@@ -489,9 +514,9 @@ def render_html(report: Report, verify_target: str) -> str:
     )
     if report.status is Status.NO_VERDICT:
         verify_panel = (
-            '<div class="kv">No verdict was reached: the runs disagreed, so this card '
-            "holds no output hash to compare. <code>verify</code> still replays every "
-            "recorded request and reports each row as UNDECIDED.</div>"
+            '<div class="kv">No verdict was reached: no output hash is pinned for the rows '
+            "that could not be decided. <code>verify</code> does not replay those rows; it "
+            "reports them as UNDECIDED and exits non-zero.</div>"
             f'<div class="kv note">{_e(_pinned_text(report))}</div>'
         )
     else:
@@ -574,7 +599,8 @@ the intersection of two minimal sets is non-empty, the shared spans are still lo
 <h2>Verify this card</h2>
 <div class="verify">
   <div class="kv">Another machine re-dispatches the recorded request bytes and compares output hashes row by row.</div>
-  <code class="cmd">injablat verify {_e(shlex.quote(verify_target))}</code>
+  <code class="cmd">{_e(_verify_command(report, verify_target))}</code>
+  <div class="kv note">Sent only <code>report.md</code>? Use <code>{_e(_lone_file_command(report))}</code>.</div>
   {verify_panel}
 </div>
 

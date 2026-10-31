@@ -14,6 +14,8 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from injablat.cli import app
+from injablat.report import render_markdown
+from injablat.verdict import Report
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE_CLAIM = REPO_ROOT / "examples" / "qwen-prefill" / "claim.yaml"
@@ -130,9 +132,10 @@ sampling:
     assert runner.invoke(app, ["report", str(claim), "--out", str(out)]).exit_code == 1
 
     result = runner.invoke(app, ["verify", str(out), "--fixture"])
-    assert result.exit_code == 0, result.output
-    assert "2 row(s) recorded as UNDECIDED were not compared" in result.output
-    assert "MATCH 0 of 2 rows" in result.output
+    assert result.exit_code == 1, result.output
+    assert "UNDECIDED 2 of 2 rows" in result.output
+    assert "MATCH 0 of" not in result.output
+    assert "not compared" not in result.output
 
 
 def test_verify_without_a_report_exits_2(tmp_path: Path) -> None:
@@ -141,3 +144,24 @@ def test_verify_without_a_report_exits_2(tmp_path: Path) -> None:
     result = runner.invoke(app, ["verify", str(empty)])
     assert result.exit_code == 2, result.output
     assert "no report.json" in result.output
+
+
+def test_card_names_the_command_that_works_as_printed(tmp_path: Path) -> None:
+    """A fixture card needs --fixture; a real card needs --endpoint."""
+    out = _prepare(tmp_path)
+    card = Report.model_validate_json((out / "report.json").read_text(encoding="utf-8"))
+
+    fixture_markdown = render_markdown(card, str(out))
+    assert f"injablat verify {out} --fixture" in fixture_markdown
+    assert "injablat verify report.md --fixture" in fixture_markdown
+
+    real_card = card.model_copy(
+        update={
+            "model": card.model.model_copy(
+                update={"endpoint_build": "vllm/0.6.3.post1"}
+            )
+        }
+    )
+    real_markdown = render_markdown(real_card, str(out))
+    assert f"injablat verify {out} --endpoint <your-endpoint>" in real_markdown
+    assert "injablat verify report.md --endpoint <your-endpoint>" in real_markdown

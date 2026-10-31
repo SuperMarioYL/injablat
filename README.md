@@ -69,7 +69,12 @@ fixture 的答案由本地模拟端点生成，只用于演示消融机制，不
 vllm serve Qwen/Qwen3-8B-Instruct --port 8000 --seed 0 --max-model-len 8192
 ```
 
-然后把 `examples/qwen-prefill/claim.yaml` 里的 `model.endpoint`、`model.revision`、`chat_template_sha` 换成本次权重的值，保留 claim 自带的 chat template，按上面的顺序去掉 `--fixture` 逐条重跑。模板必须随 claim 一起固定；如果 claim 没有带模板、端点也不提供，`validate` 会报错退出，而不是猜一个模板。
+然后把 `examples/qwen-prefill/claim.yaml` 里的 `model.endpoint` 和 `model.revision` 换成本次权重的值，再二选一固定模板：
+
+- 用目标权重的模板字节覆盖 `templates/chat_template.jinja`，并把 `chat_template_sha` 设成该文件的 sha256；
+- 或者删掉 `model.chat_template_path`，让端点提供模板（vLLM 需开启 `--enable-tokenizer-info-endpoint`），并把 `chat_template_sha` 设成端点返回模板的 sha256。
+
+`validate` 会重新计算模板文件或端点模板的哈希；它与 `chat_template_sha` 不一致就退出 2，所以只改哈希、留着旧模板会被拒绝。改完后按上面的顺序去掉 `--fixture` 逐条重跑。如果 claim 没有带模板、端点也不提供，`validate` 会报错退出，而不是猜一个模板。
 
 llama.cpp 走同样的 `/v1/chat/completions` 接口，把 `backend` 改成 `llamacpp` 并指向 `llama-server` 即可。它的 prefill 消融不在 v0.1 支持范围内，细节见「局限与已知边界」。
 
@@ -123,7 +128,7 @@ Report  {manifest, rows, minimal_sufficient, survives_without, determinism}
 
 `Manifest` 是可复核性的核心，而不是一张装饰性的元数据表。它记录 model revision、endpoint build 字符串（vLLM 的 `GET /version` 或 llama.cpp 的 `GET /props` 的 `build_info`）、chat template 哈希、tokenizer 名称、tokenizer probe 的哈希、prompt token ids 的哈希、采样参数、序列化后 messages 的请求哈希，以及 output 的哈希。prompt token ids 只取自后端 `/tokenize` 的返回，不从 chat 响应里推断。
 
-每次请求都落盘成 `reports/<claim>/runs/<config>.run<N>.json`，里面是请求字节、响应字节、耗时与 output sha256。`report.md`、`report.html` 和 `verify` 都只读这些文件，所以每张卡都能回溯到一次具体的 HTTP 交换。
+每次请求都落盘成 `reports/<claim>/runs/<config>.run<N>.json`，里面是请求字节、响应字节、耗时与 output sha256。`report` 从记录下来的 `ablation.json` 渲染卡片，该文件的行里带着请求体和 output 哈希；`verify` 读取卡片 JSON（`report.json`，或 `report.md` 中内嵌的同一份 JSON）。两者都回溯到已记录的 HTTP 交换，不重新推导证据。
 
 ### 重跑与确定性
 
@@ -173,7 +178,7 @@ Report  {manifest, rows, minimal_sufficient, survives_without, determinism}
 
 ### 最小充分注入
 
-搜索是贪心的：删一个 span，行为消失就保留删除，仍在就放回，最后对整个最小集再验一遍。请求数是 O(span 数)，不是 O(2^n)。
+搜索是贪心的：每次删掉一个 span；如果行为仍然出现，就保留这次删除（`REDUNDANT`），如果行为消失，就把这个 span 放回（`NECESSARY`）；最后对整个最小集再验一遍。请求数是 O(span 数)，不是 O(2^n)。
 
 最小充分集不唯一。贪心搜索给出的是一个解，不是全部解。报告保留每一行搜索路径和删除顺序，对方可以换一个顺序重跑；只要两组最小集的交集还在，交集中的 span 就仍然是负载的。
 
@@ -185,11 +190,11 @@ Report  {manifest, rows, minimal_sufficient, survives_without, determinism}
 | `injablat replay <claim>` | 重跑并写 manifest，执行确定性门 | `--runs`、`--out` |
 | `injablat ablate <claim>` | 删除扫描、prefill 截断梯子、贪心最小充分搜索 | `--runs`、`--out` |
 | `injablat report <claim>` | 从已记录的消融结果渲染 `report.md`、`report.html`、`report.json` | `--out` |
-| `injablat verify <report>` | 按卡里的记录重新发请求，逐行打印 `MATCH` 或 `DRIFT` | `--endpoint`、`--runs` |
+| `injablat verify <report>` | 按卡里的记录重新发请求，逐行打印 `MATCH`、`DRIFT` 或 `UNDECIDED` | `--endpoint`、`--runs` |
 
 `verify` 接受报告目录、`report.json` 或 `report.md`。`report.md` 内嵌了与 `report.json` 相同的卡片数据，所以对方只需要收到一个文件。
 
-退出码：`0` 产生了裁定；`1` 判不了（不一致、无裁定或 DRIFT）；`2` claim、模板或端点错误。
+退出码：`0` 产生了裁定；`1` 判不了（不一致、无裁定、DRIFT，或没有任何可比对的行）；`2` claim、模板或端点错误。
 
 `--fixture` 是离线演练用的本地模拟端点，不出现在 `--help` 里。它不会调用真实端点，卡片会把 endpoint build 标成 `+fixture`。
 
