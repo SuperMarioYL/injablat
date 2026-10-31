@@ -21,8 +21,6 @@ htmlcov/
 # Generated reports, replay records, and offline fixture runs
 reports/
 
-# Recorded terminal demo
-docs/demo.cast
 
 # Editor and OS files
 .idea/
