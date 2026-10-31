@@ -1,0 +1,40 @@
+# Bytecode
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+venv/
+
+# Build output
+build/
+dist/
+*.egg-info/
+
+# Test and type-checker caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Generated reports
+reports/
+
+# Recorded terminal demo
+docs/demo.cast
+
+# Editor and OS files
+.idea/
+.vscode/
+.DS_Store
+
+# Build scratch
+PUBLISH_BLOCKED.md
+BUILD_SETUP_NEXT_STEPS.md
+.spawn.*
+.builder_*
+.build_metadata*
+.stage_*
+.claude/
+CLAUDE.md
