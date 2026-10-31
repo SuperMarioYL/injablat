@@ -1,0 +1,381 @@
+{
+  "schema": 3,
+  "name": "injablat",
+  "github": "https://github.com/SuperMarioYL/injablat",
+  "palette": "auto",
+  "lang": {
+    "primary": "zh",
+    "toggle": true
+  },
+  "meta": {
+    "visual_style": "neon-particle",
+    "content_baseline": "docs/demo-results.json",
+    "demo_source": "docs/demo-results.json",
+    "content_version": "1",
+    "source_version": "v0.1.0"
+  },
+  "hero": {
+    "eyebrow": {
+      "zh": "注入消融归因 · bit-exact manifest · 可复核裁定卡",
+      "en": "Injection-ablation attribution · bit-exact manifest · re-checkable verdict card"
+    },
+    "headline": {
+      "zh": "复现不等于归因\n删掉 prefill，结论还成立吗？",
+      "en": "Reproduction is not attribution\nDoes the claim survive without the prefill?"
+    },
+    "sub": {
+      "zh": "injablat 把「某个模型做了某件事」变成一次受控删除：固定 revision、chat template、tokenizer 与采样，逐个删掉 harness 注入的 span 再重跑，输出一张带最小充分注入的裁定卡。v0.1 只做删除与前缀截断，判定路径上没有模型。",
+      "en": "injablat turns \"the model did X\" into a controlled deletion: pin the revision, chat template, tokenizer, and sampling; remove one harness-injected span at a time and re-run. The result is a verdict card carrying the minimal sufficient injection. v0.1 only deletes and truncates prefixes, and no model sits on the decision path."
+    },
+    "href": "#quickstart",
+    "cta": {
+      "zh": "开始使用",
+      "en": "Get started"
+    },
+    "ctaGithub": {
+      "zh": "在 GitHub 查看",
+      "en": "View on GitHub"
+    }
+  },
+  "advantages": [
+    {
+      "title": {
+        "zh": "先证明可复核，再谈结论",
+        "en": "Re-checkability first, verdict second"
+      },
+      "body": {
+        "zh": "manifest 记录 model revision、endpoint build、chat template 哈希、tokenizer 与 probe 哈希、prompt token ids 哈希、采样参数、请求哈希与输出哈希。每个配置至少跑两遍；两次 output_sha256 不一致就报 NONDETERMINISTIC 并非 0 退出，没有稳定指纹就不给卡。",
+        "en": "The manifest records the model revision, endpoint build, chat-template hash, tokenizer and probe hashes, prompt token-id hash, sampling parameters, request hash, and output hash. Every configuration runs at least twice; if the two output_sha256 values disagree, the tool reports NONDETERMINISTIC and exits non-zero. No stable fingerprint, no card."
+      },
+      "chips": [
+        "› manifest 绑定 revision / template / tokenizer / 采样",
+        "› 两遍重跑一致才写卡",
+        "› 不一致即 NONDETERMINISTIC"
+      ]
+    },
+    {
+      "title": {
+        "zh": "删一段，重跑，看结论在不在",
+        "en": "Remove a span, re-run, see if the claim holds"
+      },
+      "body": {
+        "zh": "只消融注入的 span，用户任务始终保留。删除扫描逐个去掉 system、prefill、tool schema 与 few-shot；prefill 走 0 / 558 / 1,116 / 1,674 / 2,232 的截断梯子；最后贪心搜索最小充分集，并对它再跑一遍。请求数是 O(span 数)，不是 O(2^n)。",
+        "en": "Only injected spans are ablated; the user task always stays. The deletion sweep removes system, prefill, tool schema, and few-shot one at a time; prefill walks a 0 / 558 / 1,116 / 1,674 / 2,232 truncation ladder; then a greedy search finds the minimal sufficient set and dispatches it once more. Request count is O(number of spans), not O(2^n)."
+      },
+      "chips": [
+        "› 只删注入 span，用户任务保留",
+        "› prefill 截断梯子",
+        "› 贪心最小充分集 + 复验"
+      ]
+    },
+    {
+      "title": {
+        "zh": "声明式判定，没有 LLM 裁判",
+        "en": "Declarative detection, no LLM referee"
+      },
+      "body": {
+        "zh": "检测器只有 contains、regex 与 json_field 三种，回答「声明的行为有没有出现」，不回答「声明是否成立」。裁定词只有 NECESSARY、REDUNDANT、UNDECIDED；把自然语言声明算子化成可匹配谓词，是使用者的工作。",
+        "en": "The detector has exactly three kinds: contains, regex, and json_field. It answers \"did the claimed behaviour occur?\", not \"is the claim true?\". The verdict vocabulary is NECESSARY, REDUNDANT, or UNDECIDED; turning a natural-language claim into a checkable predicate is the user's job."
+      },
+      "chips": [
+        "› contains · regex · json_field",
+        "› NECESSARY / REDUNDANT / UNDECIDED",
+        "› 判定路径上没有模型"
+      ]
+    }
+  ],
+  "demo": {
+    "title": {
+      "zh": "录制演示",
+      "en": "Recorded demo"
+    },
+    "note": {
+      "zh": "以下命令与关键输出来自 docs/demo-results.json 记录的离线 fixture 演示。示例文本是合成的，token 数来自随包 fixture 的 word-piece tokenizer，不是 Qwen tokenizer；卡片会把 endpoint build 标成 +fixture，不把它伪装成真实测量。",
+      "en": "The commands and key outputs below come from the offline-fixture run recorded in docs/demo-results.json. The example text is synthetic and its token counts come from the bundled fixture's word-piece tokenizer, not a Qwen tokenizer; the card tags the endpoint build with +fixture instead of passing it off as a real measurement."
+    },
+    "source": "https://github.com/SuperMarioYL/injablat/blob/main/docs/demo-results.json",
+    "steps": [
+      {
+        "label": {
+          "zh": "校验 claim 与模板",
+          "en": "Validate the claim and template"
+        },
+        "body": {
+          "zh": "validate 重新计算 chat template 的 sha256，按端点 /tokenize 统计每个 span，再渲染 messages。这个示例有 5 个 span（4 个注入 + 1 个用户任务），共 2,902 prompt tokens。",
+          "en": "validate recomputes the chat-template sha256, counts every span with the endpoint's /tokenize, and renders the messages. This example has 5 spans (4 injected plus 1 user task) and 2,902 prompt tokens."
+        },
+        "image": "/assets/demo-0-light.svg",
+        "imageDark": "/assets/demo-0-dark.svg",
+        "command": "injablat validate examples/qwen-prefill/claim.yaml --fixture",
+        "output": "{\n  \"claim\": \"qwen-prefill-curl\",\n  \"model\": \"qwen3-8b-instruct\",\n  \"backend\": \"vllm\",\n  \"endpoint_build\": \"vllm/0.6.3.post1+fixture\",\n  \"revision\": \"qwen3-8b-instruct-2026-10-14\",\n  \"chat_template_sha256\": \"2f66f42bc859b624c6c8eace91554dddd901c58484a245a7ad64fa51b1fa3ffa\",\n  \"chat_template_source\": \"claim\",\n  \"spans_total\": 5,\n  \"spans_injected\": 4,\n  \"spans_user_prompt\": 1,\n  \"span_tokens\": {\n    \"system-review-rules\": 283,\n    \"tool-fetch-url\": 207,\n    \"few-shots\": 105,\n    \"task-curl\": 25,\n    \"prefix-transcript\": 2232\n  },\n  \"rendered_messages\": 5,\n  \"prompt_tokens\": 2902\n}"
+      },
+      {
+        "label": {
+          "zh": "重跑并写 manifest",
+          "en": "Replay and write the manifest"
+        },
+        "body": {
+          "zh": "每个配置跑两遍。两遍 output_sha256 一致才写 manifest；不一致就报 NONDETERMINISTIC 并非 0 退出，不给裁定。",
+          "en": "Every configuration runs twice. The manifest is written only when both output_sha256 values agree; otherwise the tool reports NONDETERMINISTIC, exits non-zero, and gives no verdict."
+        },
+        "image": "/assets/demo-1-light.svg",
+        "imageDark": "/assets/demo-1-dark.svg",
+        "command": "injablat replay examples/qwen-prefill/claim.yaml --runs 2 --fixture",
+        "output": "{\n  \"prompt_tokens\": 2902,\n  \"prompt_token_sha256\": \"b71c763dcb862ad359495dd0e1767b19f1f616ceee7218f9032f9f66d964cd63\",\n  \"tokenizer\": \"qwen3-8b-instruct\",\n  \"tokenizer_probe_sha256\": \"011e0f1b93ebbcc2370edb8fb2c02cf5b65639150fafd94e7d923f0b03cdada3\",\n  \"manifest_sha256\": \"8c5885884957544c421ea15c3a1c227b585c3f6af29d391851517d5e89b46127\",\n  \"determinism\": \"DETERMINISTIC\",\n  \"runs_per_config\": 2\n}"
+      },
+      {
+        "label": {
+          "zh": "删除扫描与最小充分集",
+          "en": "Deletion sweep and minimal set"
+        },
+        "body": {
+          "zh": "逐个删除注入 span、走 prefill 截断梯子，再对最小集复验。这次的最小充分注入是 prefill[0:2232] + tool_schema + few_shot[0:2]；删掉 2,232 token 的 prefill 后行为不再出现。",
+          "en": "It removes injected spans one at a time, walks the prefill truncation ladder, then re-dispatches the minimal set. Here the minimal sufficient injection is prefill[0:2232] + tool_schema + few_shot[0:2]; removing the 2,232-token prefill makes the behaviour disappear."
+        },
+        "image": "/assets/demo-2-light.svg",
+        "imageDark": "/assets/demo-2-dark.svg",
+        "command": "injablat ablate examples/qwen-prefill/claim.yaml --runs 2 --fixture",
+        "output": "{\n  \"determinism\": \"DETERMINISTIC\",\n  \"determinism_detail\": \"repeat runs are byte-identical for every configuration\",\n  \"rows\": [\n    {\n      \"remove_span\": \"(bare prompt)\",\n      \"behavior\": \"NOT_FIRED\",\n      \"output_sha\": \"7d554cf3\",\n      \"role\": \"baseline\"\n    },\n    {\n      \"remove_span\": \"(nothing removed)\",\n      \"behavior\": \"FIRED\",\n      \"output_sha\": \"c73ca629\",\n      \"role\": \"reproduces\"\n    },\n    {\n      \"remove_span\": \"prefill[0:2232]\",\n      \"behavior\": \"NOT_FIRED\",\n      \"output_sha\": \"7d554cf3\",\n      \"role\": \"necessary\"\n    },\n    {\n      \"remove_span\": \"system\",\n      \"behavior\": \"FIRED\",\n      \"output_sha\": \"d670c441\",\n      \"role\": \"redundant\"\n    },\n    {\n      \"remove_span\": \"tool_schema\",\n      \"behavior\": \"NOT_FIRED\",\n      \"output_sha\": \"7d554cf3\",\n      \"role\": \"necessary\"\n    },\n    {\n      \"remove_span\": \"few_shot[0:2]\",\n      \"behavior\": \"NOT_FIRED\",\n      \"output_sha\": \"7d554cf3\",\n      \"role\": \"necessary\"\n    },\n    {\n      \"remove_span\": \"prefill[0:558]\",\n      \"behavior\": \"NOT_FIRED\",\n      \"output_sha\": \"7d554cf3\",\n      \"role\": \"insufficient\"\n    },\n    {\n      \"remove_span\": \"prefill[0:1116]\",\n      \"behavior\": \"NOT_FIRED\",\n      \"output_sha\": \"7d554cf3\",\n      \"role\": \"insufficient\"\n    },\n    {\n      \"remove_span\": \"prefill[0:1674]\",\n      \"behavior\": \"NOT_FIRED\",\n      \"output_sha\": \"7d554cf3\",\n      \"role\": \"insufficient\"\n    },\n    {\n      \"remove_span\": \"(minimal set)\",\n      \"behavior\": \"FIRED\",\n      \"output_sha\": \"d670c441\",\n      \"role\": \"verified\"\n    }\n  ],\n  \"minimal_sufficient\": [\n    \"prefill[0:2232]\",\n    \"tool_schema\",\n    \"few_shot[0:2]\"\n  ],\n  \"survives_without_prefill\": false,\n  \"run_records\": 20\n}"
+      },
+      {
+        "label": {
+          "zh": "渲染裁定卡",
+          "en": "Render the verdict card"
+        },
+        "body": {
+          "zh": "report 从已记录的 ablation.json 渲染 report.md、report.html 与 report.json；它不重新推导证据，卡片直接回溯到落盘的 HTTP 交换。",
+          "en": "report renders report.md, report.html, and report.json from the recorded ablation.json. It does not re-derive evidence; the card traces back to the persisted HTTP exchanges."
+        },
+        "image": "/assets/demo-3-light.svg",
+        "imageDark": "/assets/demo-3-dark.svg",
+        "command": "injablat report examples/qwen-prefill/claim.yaml",
+        "output": "{\n  \"files\": [\n    \"reports/qwen-prefill-curl/report.md\",\n    \"reports/qwen-prefill-curl/report.html\",\n    \"reports/qwen-prefill-curl/report.json\"\n  ]\n}"
+      },
+      {
+        "label": {
+          "zh": "按记录重新发请求",
+          "en": "Re-dispatch the recorded requests"
+        },
+        "body": {
+          "zh": "verify 读取卡里的记录逐行重发，打印 MATCH、DRIFT 或 UNDECIDED。这次 10 行全部 MATCH，输出哈希未变。",
+          "en": "verify re-dispatches the card's recorded requests and prints MATCH, DRIFT, or UNDECIDED per row. This run matched 10 of 10 rows with unchanged output hashes."
+        },
+        "image": "/assets/demo-4-light.svg",
+        "imageDark": "/assets/demo-4-dark.svg",
+        "command": "injablat verify reports/qwen-prefill-curl --fixture",
+        "output": "{\n  \"runs_per_row\": 2,\n  \"rows\": 10,\n  \"matched\": 10,\n  \"drifted\": 0,\n  \"undecided\": 0,\n  \"summary\": \"MATCH 10 of 10 rows (output hashes unchanged)\"\n}"
+      }
+    ]
+  },
+  "quickstart": {
+    "title": {
+      "zh": "快速开始",
+      "en": "Quickstart"
+    },
+    "body": {
+      "zh": "需要 Python 3.12 或更高版本。v0.1 尚未发布到 PyPI，请从源码安装；CLI 只发 HTTP 请求，不安装 CUDA，也不下载权重。",
+      "en": "Python 3.12 or newer is required. v0.1 is not on PyPI yet, so install from source. The CLI only makes HTTP requests: no CUDA and no model download."
+    },
+    "steps": [
+      {
+        "title": {
+          "zh": "从源码安装",
+          "en": "Install from source"
+        },
+        "code": "git clone https://github.com/SuperMarioYL/injablat.git\ncd injablat\nuv venv --python 3.12\nuv pip install -e .\nsource .venv/bin/activate\ninjablat --help"
+      },
+      {
+        "title": {
+          "zh": "先跑离线 fixture",
+          "en": "Run the offline fixture first"
+        },
+        "code": "injablat validate examples/qwen-prefill/claim.yaml --fixture\ninjablat replay examples/qwen-prefill/claim.yaml --runs 2 --fixture\ninjablat ablate examples/qwen-prefill/claim.yaml --runs 2 --fixture\ninjablat report examples/qwen-prefill/claim.yaml\ninjablat verify reports/qwen-prefill-curl --fixture"
+      },
+      {
+        "title": {
+          "zh": "接上真实端点",
+          "en": "Point it at a real endpoint"
+        },
+        "code": "vllm serve Qwen/Qwen3-8B-Instruct --port 8000 --seed 0 --max-model-len 8192\n# 修改 examples/qwen-prefill/claim.yaml 的 endpoint、revision 与 chat_template_sha\n# 去掉 --fixture，按同一顺序重跑"
+      }
+    ]
+  },
+  "limitations": [
+    {
+      "zh": "内置示例是合成的：文本为示例编写，token 数来自随包 fixture 的 tokenizer，只演示机制，不代表任何已发布权重的行为。",
+      "en": "The bundled example is synthetic: its text was written for the example and its token counts come from the fixture tokenizer. It demonstrates the mechanism and does not represent the behaviour of released weights."
+    },
+    {
+      "zh": "离线 fixture 不是测量：--fixture 只用于快速验证流程，卡片会把 endpoint build 标成 +fixture。",
+      "en": "The offline fixture is not a measurement: --fixture only validates the flow quickly, and the card tags the endpoint build with +fixture."
+    },
+    {
+      "zh": "prefill 消融只支持 vLLM（continue_final_message）；llama.cpp 在 v0.1 只用于非 prefill 的删除扫描。",
+      "en": "Prefill ablation is vLLM-only (continue_final_message); llama.cpp is supported for non-prefill deletion sweeps in v0.1."
+    },
+    {
+      "zh": "只认一种 span JSONL 格式：任意 agent 框架的 trace 需要手工转换，没有自动导入器。",
+      "en": "Only one span JSONL format is accepted; traces from arbitrary agent frameworks need manual conversion, and there is no automatic importer."
+    },
+    {
+      "zh": "只做删除与前缀截断：不改写、不做同义替换、不做 token 扰动。删掉后行为消失只说明这段是必要的，不证明它单独就足以诱发行为。",
+      "en": "Only deletion and prefix truncation: no rewriting, no synonym substitution, no token perturbation. A behaviour disappearing after a removal shows the span was necessary, not that it alone is sufficient."
+    },
+    {
+      "zh": "检测器是声明式的：它不理解语义，只执行 contains、regex 或 json_field；claim 必须先被算子化成可匹配谓词。",
+      "en": "The detector is declarative: it does not understand meaning and only runs contains, regex, or json_field; the claim must first be turned into a checkable predicate."
+    },
+    {
+      "zh": "最小充分集不唯一：贪心顺序会影响结果，报告保留每一行搜索路径，请用另一个顺序复核。",
+      "en": "The minimal sufficient set is not unique: greedy order affects the result, and the report keeps every search-path row so it can be checked under another order."
+    },
+    {
+      "zh": "没有统计显著性：默认前提是 temperature 0、seed 0，不做多次采样的置信区间。",
+      "en": "No statistical significance: the default premise is temperature 0 and seed 0, with no confidence intervals from repeated sampling."
+    },
+    {
+      "zh": "无法固定 revision 的闭源端点不在支持范围；没有可复核的 manifest 就不给裁定。v0.1 只有单进程 CLI 与本地 reports 目录，没有 Web 面板、服务端、多用户或队列。",
+      "en": "Closed endpoints with unpinnable revisions are out of scope; without a re-checkable manifest there is no verdict. v0.1 is a single-process CLI with local report directories only: no web panel, server, multi-user login, or queue."
+    }
+  ],
+  "scene": {
+    "kind": "neon-graph",
+    "caption": {
+      "zh": "示意场景：一条声明连同注入上下文进入受控删除与重跑；确切数字以下方录制演示为准。",
+      "en": "Illustrative scene: one claim and its injected context enter a controlled deletion sweep; exact numbers belong to the recorded demo below."
+    },
+    "fallback": "/assets/scene-dark.svg",
+    "fallbackLight": "/assets/scene-light.svg"
+  },
+  "story": {
+    "intro": {
+      "title": {
+        "zh": "复现只证明它出现过，没回答是谁让它出现",
+        "en": "Reproduction shows it happened, not who caused it"
+      },
+      "body": {
+        "zh": "一条公开声明说「模型会补全半截 cURL」。你在自己的端点上复现了：在同一个 system prompt、prefill 和 tool schema 下，它确实会。但复现只证明这个行为在某种上下文里出现过，没有回答是谁让它出现的。Injablat 把这个问题变成一次受控删除：固定 temperature 0、seed 0、batch 1，记下模型 revision、chat template、tokenizer 与请求字节，然后逐个删掉注入的 span 再跑。输出是一张裁定卡，上面有最小充分注入，以及那个真正想问的问题的答案——把这段删掉，结论还成立吗。",
+        "en": "A public claim says the model completes a partial cURL command. You reproduce it on your own endpoint: with the same system prompt, prefill, and tool schema, it does. But reproduction only shows that the behaviour appeared in some context; it does not answer who made it appear. Injablat turns that question into a controlled deletion: pin temperature 0, seed 0, and batch 1; record the model revision, chat template, tokenizer, and request bytes; then remove one injected span at a time and re-run. The output is a verdict card with the minimal sufficient injection and the answer to the question that matters: if this span is gone, does the conclusion still hold?"
+      }
+    },
+    "sections": [
+      {
+        "title": {
+          "zh": "工作方式：从 claim 到可复核的裁定卡",
+          "en": "How it works: from claim to re-checkable card"
+        },
+        "body": {
+          "zh": "claim.yaml 固定模型名、endpoint、后端、revision、chat template 哈希、每个 span 的文本与 token 数、声明式检测器与采样参数。validate 校验 schema、解析模板并逐 span 统计；replay 重跑并写 manifest、执行确定性门；ablate 做删除扫描、prefill 截断梯子与最小充分搜索；report 从落盘的 ablation.json 渲染卡片；verify 按记录重新发请求，逐行给出 MATCH / DRIFT / UNDECIDED。prompt token ids 只取自后端 /tokenize 的返回，不从 chat 响应里推断。",
+          "en": "claim.yaml pins the model name, endpoint, backend, revision, chat-template hash, each span's text and token count, a declarative detector, and the sampling parameters. validate checks the schema, resolves the template, and counts every span; replay re-dispatches, writes the manifest, and runs the determinism gate; ablate performs the deletion sweep, the prefill ladder, and the minimal-sufficiency search; report renders the card from the persisted ablation.json; verify re-dispatches the recorded requests and prints MATCH / DRIFT / UNDECIDED per row. Prompt token ids come only from the backend's /tokenize response, never inferred from the chat response."
+        },
+        "image": {
+          "light": "/assets/architecture-light.svg",
+          "dark": "/assets/architecture-dark.svg",
+          "alt": {
+            "zh": "从 claim、validate、replay manifest、ablate 删除扫描到 report 与 verify 的流水线",
+            "en": "The pipeline from claim through validate, replay manifest, ablate sweep to report and verify"
+          },
+          "mobile": {
+            "light": "/assets/architecture-mobile-light.svg",
+            "dark": "/assets/architecture-mobile-dark.svg"
+          }
+        }
+      },
+      {
+        "title": {
+          "zh": "裁定卡：最小充分注入与存活判定",
+          "en": "The card: minimal sufficient injection and survival"
+        },
+        "body": {
+          "zh": "内置示例的录制卡里，完整注入下行为出现；删掉 2,232 token 的 prefill 后行为消失（NECESSARY）；删掉 system prompt 后行为仍在（REDUNDANT）；tool_schema 与 few_shot[0:2] 也是必要的；prefill 截到 558、1,116、1,674 token 都不够。最小充分集 prefill[0:2232] + tool_schema + few_shot[0:2] 被重新跑了一遍，仍然成立；survives without prefill = NO。同一份记录用 verify 重发，10 行全部 MATCH。",
+          "en": "In the recorded card for the bundled example, the behaviour appears under the full injection; removing the 2,232-token prefill makes it disappear (NECESSARY); removing the system prompt leaves it in place (REDUNDANT); tool_schema and few_shot[0:2] are necessary too; truncating the prefill to 558, 1,116, or 1,674 tokens is not enough. The minimal set prefill[0:2232] + tool_schema + few_shot[0:2] was dispatched once more and still held; survives without prefill = NO. Re-dispatching the same record with verify matched 10 of 10 rows."
+        },
+        "image": {
+          "light": "/assets/process-light.svg",
+          "dark": "/assets/process-dark.svg",
+          "alt": {
+            "zh": "删除扫描的十行结果、三个裁定词与最小充分注入",
+            "en": "The ten-row deletion sweep, the three verdict words and the minimal sufficient injection"
+          },
+          "mobile": {
+            "light": "/assets/process-mobile-light.svg",
+            "dark": "/assets/process-mobile-dark.svg"
+          }
+        }
+      },
+      {
+        "title": {
+          "zh": "v0.1 的边界、路线图与团队版",
+          "en": "v0.1 boundaries, roadmap and team edition"
+        },
+        "body": {
+          "zh": "v0.1 只有单进程 CLI 与本地 reports 目录：没有 Web 面板、服务端、多用户或队列。prefill 消融只支持 vLLM；只认一种 span JSONL 格式；只做删除与前缀截断；检测器只有 contains、regex、json_field；最小集不唯一，也没有统计显著性检验。路线图里的 llama.cpp prefill、trace 导入器、批量矩阵、重复采样与统计显著性、裁定卡签名/归档都尚未实现，不承诺日期。团队版（内网私有化部署、裁定卡签名与归档、换权重回归、采购与尽调模板）是按年授权的付费形态，当前仅作为路线图，尚未作为产品交付；v0.1 只出免费 MIT 内核。",
+          "en": "v0.1 is a single-process CLI with local report directories: no web panel, server, multi-user login, or queue. Prefill ablation is vLLM-only; only one span JSONL format is accepted; only deletion and prefix truncation are performed; the detector supports only contains, regex, and json_field; the minimal set is not unique and there is no statistical significance testing. The roadmap items — llama.cpp prefill, a trace importer, batch matrices, repeated sampling and significance, card signing and archiving — are not implemented and carry no promised dates. The team edition (private/on-premises deployment, card signing and archiving, regression on new weights, procurement and due-diligence templates) is an annually licensed paid form that exists only as a roadmap, not as a delivered product; v0.1 ships the free MIT core."
+        },
+        "image": {
+          "light": "/assets/integrations-light.svg",
+          "dark": "/assets/integrations-dark.svg",
+          "alt": {
+            "zh": "五个 v0.1 命令、真实端点与两条后端路径、以及尚未交付的路线图",
+            "en": "The five v0.1 commands, the real-endpoint path with two backends, and the undelivered roadmap"
+          },
+          "mobile": {
+            "light": "/assets/integrations-mobile-light.svg",
+            "dark": "/assets/integrations-mobile-dark.svg"
+          }
+        }
+      }
+    ],
+    "details": [
+      {
+        "title": {
+          "zh": "命令一览",
+          "en": "Commands"
+        },
+        "body": {
+          "zh": "退出码：0 产生了裁定；1 判不了（不一致、无裁定、DRIFT，或没有可比对的行）；2 claim、模板或端点错误。--fixture 是离线演练用的本地模拟端点，不出现在 --help 里。",
+          "en": "Exit codes: 0 a verdict was produced; 1 no verdict (nondeterminism, none, DRIFT, or no comparable row); 2 a claim, template, or endpoint error. --fixture is the local simulated endpoint for offline walkthroughs and is hidden from --help."
+        },
+        "code": "injablat validate <claim>   # 校验 schema / 模板 / 渲染 / 逐 span token\ninjablat replay <claim>     # 重跑 + manifest + 确定性门\ninjablat ablate <claim>     # 删除扫描 + prefill 阶梯 + 贪心最小集\ninjablat report <claim>     # 渲染 report.md / report.html / report.json\ninjablat verify <report>    # 重发记录请求，逐行 MATCH / DRIFT"
+      },
+      {
+        "title": {
+          "zh": "manifest 与确定性门",
+          "en": "The manifest and determinism gate"
+        },
+        "body": {
+          "zh": "manifest 是可复核性的核心，不是装饰性元数据：它记录 model revision、endpoint build（vLLM 的 GET /version 或 llama.cpp 的 build_info）、chat template 哈希、tokenizer 名称、tokenizer probe 哈希、prompt token ids 哈希、采样参数、序列化后 messages 的请求哈希与输出哈希。每次请求都落盘成 runs/<config>.run<N>.json，report 与 verify 都回溯到已记录的 HTTP 交换。",
+          "en": "The manifest is the core of verifiability, not decorative metadata: it records the model revision, endpoint build (vLLM's GET /version or llama.cpp's build_info), chat-template hash, tokenizer name, tokenizer probe hash, prompt token-id hash, sampling parameters, the request hash of the serialized messages, and the output hash. Every request is written to runs/<config>.run<N>.json, and both report and verify trace back to the recorded HTTP exchanges."
+        },
+        "code": "manifest sha256:8c5885884957544c421ea15c3a1c227b585c3f6af29d391851517d5e89b46127\ndeterminism DETERMINISTIC (repeat runs are byte-identical for every configuration)"
+      },
+      {
+        "title": {
+          "zh": "团队版：路线图，不是现成产品",
+          "en": "Team edition: roadmap, not a shipped product"
+        },
+        "body": {
+          "zh": "CLI 与消融引擎保持 MIT 开源，免费使用。团队版面向内网与私有化部署、裁定卡归档与签名、换权重回归、采购与尽调模板，按年授权、不做自助结账；这些能力尚未交付，当前只是路线图。具体席位、范围与报价通过 GitHub Issues（标题以 [team] 开头）联系维护者。",
+          "en": "The CLI and ablation engine stay MIT-licensed and free. The team edition is aimed at private/on-premises deployment, card archiving and signing, regression on new weights, and procurement/due-diligence templates; it is licensed annually with no self-serve checkout. Those capabilities are not delivered yet and exist only as a roadmap. For seats, scope, and pricing, reach the maintainer through GitHub Issues with a title starting with [team]."
+        },
+        "code": ""
+      }
+    ]
+  },
+  "cta": {
+    "headline": {
+      "zh": "在你的端点上跑一张自己的裁定卡",
+      "en": "Run your own verdict card on your endpoint"
+    },
+    "sub": {
+      "zh": "离线 fixture 约 70 秒走完 validate → verify；真实测量请把 claim 指向你固定得住的 revision。",
+      "en": "The offline fixture runs validate → verify in about 70 seconds; for a real measurement, point the claim at a revision you can pin."
+    }
+  },
+  "footer": {
+    "tag": {
+      "zh": "删掉注入的每一段上下文，重跑，看结论还站不站得住。",
+      "en": "Remove each injected span, re-run, and see whether the claim still holds."
+    }
+  }
+}

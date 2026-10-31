@@ -1,0 +1,38 @@
+{
+  "mode": "auto",
+  "id": "56b4e6-6a78e7-acf6f5-8f471153f78a",
+  "identity": "https://github.com/supermarioyl/injablat",
+  "primary": "#56b4e6",
+  "secondary": "#6a78e7",
+  "highlight": "#acf6f5",
+  "dark": {
+    "bg": "#050a12",
+    "panel": "#0c141f",
+    "code": "#0a131d",
+    "ink": "#eefdfd",
+    "muted": "#95afc4",
+    "line": "#172f41",
+    "primary": "#56b4e6",
+    "secondary": "#6a78e7",
+    "highlight": "#acf6f5",
+    "accent": "#56b4e6",
+    "buttonStart": "#3c7da0",
+    "buttonEnd": "#616dd3",
+    "buttonText": "#ffffff"
+  },
+  "light": {
+    "bg": "#f9fcfe",
+    "panel": "#f7fbfe",
+    "code": "#f3fafd",
+    "ink": "#132330",
+    "muted": "#557188",
+    "line": "#cbe8f7",
+    "primary": "#3a799b",
+    "secondary": "#5e6acd",
+    "highlight": "#557979",
+    "accent": "#3a799b",
+    "buttonStart": "#3c7da0",
+    "buttonEnd": "#616dd3",
+    "buttonText": "#ffffff"
+  }
+}
